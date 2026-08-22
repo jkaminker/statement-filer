@@ -26,9 +26,16 @@ export async function readPages(pdfjsLib, arrayBuffer) {
     const viewport = page.getViewport({ scale: 1 });
     const content = await page.getTextContent();
     const words = [];
+    // Some statements (Rogers) lay the description out as fixed-width fields —
+    // merchant, city, province — padded out with spaces. pdf.js emits each field
+    // as its own text item, so remembering which item a word came from is what
+    // lets a parser split "A&W #4514 TORONTO" (the merchant) from "TORONTO" (the
+    // city) in a case where the gap in x cannot.
+    let field = 0;
     for (const item of content.items) {
       const text = (item.str || '').trim();
       if (!text) continue;
+      field++;
       // pdf.js transform: [a,b,c,d,e,f]; e,f are the origin in PDF space.
       // Group rows by BASELINE, not by glyph top: a row mixes font sizes (the
       // amount column is bolder than the description) and tops therefore differ
@@ -47,7 +54,7 @@ export async function readPages(pdfjsLib, arrayBuffer) {
         const w = per * part.length;
         words.push({
           text: part, x0: cursor, x1: cursor + w,
-          y0: yTop, y1: yBottom, baseline,
+          y0: yTop, y1: yBottom, baseline, field,
         });
         cursor += w + per; // approximate the space
       }

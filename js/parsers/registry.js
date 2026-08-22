@@ -1,7 +1,8 @@
 import * as amex from './amex.js';
 import * as cibc from './cibc.js';
+import * as rogers from './rogers.js';
 
-export const PARSERS = [amex, cibc];
+export const PARSERS = [amex, cibc, rogers];
 
 export function parserFor(cardId) {
   return PARSERS.find((p) => p.id === cardId) || null;
