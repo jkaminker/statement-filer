@@ -18,17 +18,22 @@ For a quarter's statements from one card:
 Annual Audit 2026 Sep
 └── Credit Card Statements
     └── Amex
+        ├── Amex Jul 17 2026 Statement.pdf     ← one untouched copy of each
+        ├── Amex Aug 17 2026 Statement.pdf       statement, as the bank issued it
         └── Q3 2026
             ├── Q3 2026 Amex Transactions.xlsx     ← Summary / Data / Review sheets
             ├── Abridged Statements/
-            │   ├── Amex Jul 17 2026 Statement.pdf
-            │   └── Amex Aug 17 2026 Statement.pdf
-            └── Expenses Summary/
+            │   ├── Amex Jul 17 2026 Statement.pdf   ← transaction pages only:
+            │   └── Amex Aug 17 2026 Statement.pdf     no agreement, no interest
+            └── Expenses Summary/                      tables, no marketing
                 ├── Amex Q3 2026 Business Travel.pdf   ← every Business Travel line
                 ├── Amex Q3 2026 Meals.pdf             ←   highlighted in yellow
                 ├── Amex Q3 2026 Professional Fees.pdf
                 └── … one per category
 ```
+
+The full statement is filed once per card, not once per quarter, and it's skipped if a
+file of that name is already there — so re-running a quarter never duplicates it.
 
 The workbook's Summary sheet carries a **reconciliation block** that compares the total of
 everything parsed against the statements' own control totals. If those don't match to the
