@@ -69,9 +69,15 @@ export async function buildWorkbook(ExcelJS, opts) {
   sum.getCell('A1').value = `${cfg.label} ${quarter} Expense Summary`;
   sum.getCell('A1').font = { bold: true, size: 12 };
 
+  // the out-of-GTA category is named per card: "Travel" on Rogers, "Business
+  // Travel" on Amex and CIBC, matching what each folder already uses
+  const travelCategory = cfg.gtaToCategory || (rules.gtaRule || {}).toCategory || '';
+  const gtaNote = rules.gtaRule && rules.gtaRule.enabled
+    ? String(rules.gtaRule.note || '').replace('{travelCategory}', travelCategory) + ' '
+    : '';
   const periodLine =
     `Built from ${statements.map((s) => s.label).join(' & ')} statement${statements.length > 1 ? 's' : ''}. `
-    + (rules.gtaRule && rules.gtaRule.enabled ? rules.gtaRule.note + ' ' : '')
+    + gtaNote
     + notes.join(' ');
   sum.getCell('A2').value = periodLine;
   sum.getCell('A2').font = NOTE_FONT;

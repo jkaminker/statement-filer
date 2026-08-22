@@ -45,9 +45,12 @@ export async function buildCategoryPdfs(PDFLib, sources, transactions, rules, ca
       const [x0, x1] = spanFor(src, t.page, width);
 
       // parsed y is measured from the top of the page; PDF space measures from
-      // the bottom, so flip before writing the annotation rectangle
-      const yTop = height - t.y0 + PAD;
-      const yBottom = height - t.y1 - PAD;
+      // the bottom, so flip before writing the annotation rectangle.
+      // A parser can shave the box where its rows sit tightly together — Rogers
+      // prints them 11pt apart — so a highlight never bleeds onto the line below.
+      const inset = (src.parser && src.parser.highlightInset) || 0;
+      const yTop = height - t.y0 + PAD - inset;
+      const yBottom = height - t.y1 - PAD + inset;
 
       const annot = doc.context.obj({
         Type: 'Annot',

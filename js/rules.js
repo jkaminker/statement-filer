@@ -37,13 +37,46 @@ function longestMatch(place, list) {
   return best;
 }
 
-/** Where a charge happened: 'gta' | 'outside' | 'artifact' | null (unknown). */
-export function classifyPlace(desc, gtaRule) {
+/**
+ * You often shop the same place on more than one card. When a merchant is new to
+ * THIS card but you have already ruled on it elsewhere, offer that answer as the
+ * suggestion on the Review sheet — and only when every other card agrees. It is
+ * never applied on its own; the row still waits for you.
+ *
+ * Cards differ in how much of the line they keep: Rogers stores "SDM 1281" while
+ * CIBC stores "SDM 1281 TORONTO, ON", so match on the leading merchant text.
+ */
+function crossCardSuggestion(key, cardId, rules) {
+  const target = key.toUpperCase();
+  if (target.length < 4) return null;
+  const cats = new Set();
+  const cards = [];
+  for (const otherId of Object.keys(rules.merchants || {})) {
+    if (otherId === cardId || otherId === 'shared') continue;
+    for (const k of Object.keys(rules.merchants[otherId])) {
+      const kk = clean(k).toUpperCase();
+      if (kk === target || kk.startsWith(target + ' ')) {
+        cats.add(rules.merchants[otherId][k]);
+        if (!cards.includes(otherId)) cards.push(otherId);
+      }
+    }
+  }
+  if (cats.size !== 1) return null;
+  return { category: [...cats][0], cards };
+}
+
+/**
+ * Where a charge happened: 'gta' | 'outside' | 'artifact' | null (unknown).
+ * Amex and CIBC carry the town inside the description ("… TORONTO, ON"); Rogers
+ * keeps it in its own field, so a parser can pass it separately as `where`.
+ */
+export function classifyPlace(desc, gtaRule, where) {
   const d = clean(desc).toUpperCase();
   for (const k of Object.keys(gtaRule.addressArtifacts || {})) {
     if (d.includes(k)) return 'artifact';
   }
-  const place = d.includes(', ') ? d.slice(0, d.lastIndexOf(', ')) : d;
+  const src = where ? clean(where).toUpperCase() : d;
+  const place = src.includes(', ') ? src.slice(0, src.lastIndexOf(', ')) : src;
   const out = longestMatch(place, gtaRule.outsidePlaces || []);
   const gta = longestMatch(place, gtaRule.gtaPlaces || []);
   if (out && gta) return out.length >= gta.length ? 'outside' : 'gta';
@@ -100,12 +133,18 @@ export function categorize(transactions, cardId, rules) {
       } else {
         t.category = REVIEW;
         t.reason = 'new merchant, no rule';
+        const cross = crossCardSuggestion(key, cardId, rules);
+        const note = t.spendCategory
+          ? `New merchant on this card. Bank category: ${t.spendCategory}.`
+          : 'New merchant on this card - no prior treatment to follow.';
         review.push({
           ...t,
-          suggested: fallback && fallback !== REVIEW ? fallback : '',
-          note: t.spendCategory
-            ? `New merchant this quarter. Bank category: ${t.spendCategory}.`
-            : 'New merchant this quarter - no prior treatment to follow.',
+          suggested: (fallback && fallback !== REVIEW ? fallback : '') || (cross ? cross.category : ''),
+          note: cross
+            ? `${note} You code this merchant as "${cross.category}" on your `
+              + `${cross.cards.map((c) => (rules.cards[c] || {}).label || c).join(' and ')} `
+              + 'statements - leave COMMENTS blank and it stays in Review, or confirm it there.'
+            : note,
         });
         continue;
       }
@@ -129,11 +168,15 @@ export function categorize(transactions, cardId, rules) {
   // 5. the out-of-GTA meals rule, applied after everything else
   const g = rules.gtaRule;
   if (g && g.enabled) {
+    // your Rogers workbooks call this category "Travel" where Amex and CIBC call
+    // it "Business Travel", so each card can name its own
+    const card = rules.cards[cardId] || {};
+    const travelCategory = card.gtaToCategory || g.toCategory;
     for (const t of transactions) {
       if (!(g.fromCategories || []).includes(t.category)) continue;
-      const where = classifyPlace(t.desc, g);
+      const where = classifyPlace(t.desc, g, t.place);
       if (where === 'outside') {
-        t.category = g.toCategory;
+        t.category = travelCategory;
         t.reason = 'meal outside the GTA';
       } else if (where === 'artifact') {
         flags.push({
@@ -149,7 +192,8 @@ export function categorize(transactions, cardId, rules) {
           desc: clean(t.desc),
           category: t.category,
           amount: t.amount,
-          note: 'Location not in the GTA list or the outside-GTA list in rules.json. '
+          note: (t.place ? `Location "${t.place}" is ` : 'Location ')
+              + 'not in the GTA list or the outside-GTA list in rules.json. '
               + 'Left as is - add the city to rules.json to settle it for good.',
         });
       }
