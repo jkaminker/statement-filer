@@ -42,6 +42,14 @@ const CASES = [
     expect: { card: 'cibc', quarter: 'Q3 2026', total: 6555.44, count: 91,
               categories: EXPECTED.cibc },
   },
+  {
+    // Rogers is the two-sided one: positives tie to "New purchases & debits",
+    // negatives to "Payments & credits", and the card payment is dropped.
+    name: 'Rogers Q3 2026',
+    files: ['samples/Rogers Jul 2026 Statement.pdf', 'samples/Rogers Aug 2026 Statement.pdf'],
+    expect: { card: 'rogers', quarter: 'Q3 2026', total: 14758.84, count: 115,
+              categories: EXPECTED.rogers },
+  },
 ];
 
 const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });

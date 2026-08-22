@@ -32,12 +32,15 @@ const page = await browser.newPage();
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.goto(`${base}/index.html`, { waitUntil: 'domcontentloaded' });
 
-// stash doctored rules before the app reads them
-await page.evaluate(async (drop) => {
-  const rules = await (await fetch('rules.json')).json();
+// stash doctored rules before the app reads them. Use the private merchant map
+// when it's there — the rules.json in the repo ships with an empty one, so
+// without it every row lands in Review and there is no review loop to test.
+const RULES_FILE = fs.existsSync(path.join(ROOT, 'my-rules.json')) ? 'my-rules.json' : 'rules.json';
+await page.evaluate(async ({ drop, file }) => {
+  const rules = await (await fetch(file)).json();
   for (const d of drop) delete rules.merchants.amex[d];
   localStorage.setItem('statement-filer.rules', JSON.stringify(rules));
-}, DROP);
+}, { drop: DROP, file: RULES_FILE });
 await page.reload({ waitUntil: 'domcontentloaded' });
 await page.waitForFunction(() => !!window.ExcelJS && !!window.PDFLib, null, { timeout: 30000 });
 
