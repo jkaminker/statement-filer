@@ -6,6 +6,36 @@
 
 const PAD = 1.6;
 
+/**
+ * The "Abridged Statements" copy: the statement with everything but the
+ * transaction pages dropped — no cardholder agreement, no interest tables, no
+ * marketing. Matches what's already filed in the audit folder for every card,
+ * and it's the same page set the highlighted category PDFs are built from.
+ */
+export async function buildAbridgedStatements(PDFLib, sources) {
+  const { PDFDocument } = PDFLib;
+  const out = [];
+  for (const src of sources) {
+    const wanted = src.parsed.transactionPages;
+    const donor = await PDFDocument.load(src.bytes);
+    if (!wanted.length || wanted.length === donor.getPageCount()) {
+      out.push({ name: src.name, bytes: src.bytes, pages: donor.getPageCount(), abridged: false });
+      continue;
+    }
+    const doc = await PDFDocument.create();
+    const copied = await doc.copyPages(donor, wanted);
+    copied.forEach((p) => doc.addPage(p));
+    out.push({
+      name: src.name,
+      bytes: await doc.save(),
+      pages: wanted.length,
+      droppedFrom: donor.getPageCount(),
+      abridged: true,
+    });
+  }
+  return out;
+}
+
 export async function buildCategoryPdfs(PDFLib, sources, transactions, rules, card, quarter) {
   const { PDFDocument, PDFString } = PDFLib;
   const cfg = rules.cards[card];

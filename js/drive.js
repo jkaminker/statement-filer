@@ -152,11 +152,16 @@ export async function downloadFile(fileId) {
 }
 
 /**
- * File a completed run into Drive:
- *   Annual Audit {fy} Sep / Credit Card Statements / {Card} / {Quarter} /
- *      {Quarter} workbook.xlsx
- *      Abridged Statements/  (the source statements)
- *      Expense(s) Summary/   (one highlighted PDF per category)
+ * File a completed run into Drive, mirroring how the audit folder is already
+ * laid out on disk — the untouched statements live loose in the card folder,
+ * and each quarter keeps only the abridged copy:
+ *
+ *   Annual Audit {fy} Sep / Credit Card Statements / {Card} /
+ *      <the statements exactly as the bank issued them>
+ *      {Quarter} /
+ *         {Quarter} workbook.xlsx
+ *         Abridged Statements/  (transaction pages only)
+ *         Expense(s) Summary/   (one highlighted PDF per category)
  */
 export async function fileRun(result, rules, onProgress = () => {}) {
   const cfg = rules.cards[result.card];
@@ -179,8 +184,23 @@ export async function fileRun(result, rules, onProgress = () => {}) {
     quarterFolder
   ));
 
+  // one untouched copy of each statement, kept in the card folder alongside the
+  // other quarters — skipped if it's already there, so re-running is harmless
   for (const s of result.sources) {
+    if (await findFile(s.name, cardFolder)) {
+      onProgress(`${s.name} is already filed — leaving it alone.`);
+      continue;
+    }
     onProgress(`Uploading ${s.name}…`);
+    uploaded.push(await uploadFile(s.name, 'application/pdf', s.bytes, cardFolder));
+  }
+
+  // the quarter keeps the abridged copy — transaction pages only
+  const statementFiles = (result.abridged && result.abridged.length)
+    ? result.abridged
+    : result.sources;
+  for (const s of statementFiles) {
+    onProgress(`Uploading ${s.name} (abridged)…`);
     uploaded.push(await uploadFile(s.name, 'application/pdf', s.bytes, stmtFolder));
   }
 

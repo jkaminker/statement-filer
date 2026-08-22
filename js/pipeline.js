@@ -4,7 +4,7 @@ import { readPages, quarterOf, fiscalYearOf } from './parsers/base.js';
 import { detectCard, parserFor } from './parsers/registry.js';
 import { categorize, summarize } from './rules.js';
 import { buildWorkbook } from './workbook.js';
-import { buildCategoryPdfs } from './highlight.js';
+import { buildCategoryPdfs, buildAbridgedStatements } from './highlight.js';
 
 /**
  * @param {File[]} files          statement PDFs the user dropped
@@ -93,6 +93,7 @@ export async function run(files, rules, libs, onProgress = () => {}) {
 
   onProgress('Highlighting the statements…');
   const categoryPdfs = await buildCategoryPdfs(PDFLib, sources, all, rules, card, quarter);
+  const abridged = await buildAbridgedStatements(PDFLib, sources);
 
   return {
     card,
@@ -113,6 +114,7 @@ export async function run(files, rules, libs, onProgress = () => {}) {
       bytes: workbookBytes,
     },
     categoryPdfs,
+    abridged,
   };
 }
 
