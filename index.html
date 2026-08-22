@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Statement Filer</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📒</text></svg>">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand">
+    <span class="mark">📒</span>
+    <div>
+      <h1>Statement Filer</h1>
+      <p class="sub">Credit card statements → categorized workbook → Google Drive</p>
+    </div>
+  </div>
+  <div class="bar-right">
+    <span id="driveState" class="pill pill-off">Drive not connected</span>
+    <button id="connectBtn" class="btn btn-primary">Connect Google Drive</button>
+    <button id="settingsBtn" class="btn btn-ghost" title="Settings">⚙</button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab is-active" data-tab="process" role="tab">1 · Process statements</button>
+  <button class="tab" data-tab="review" role="tab">2 · Apply my review</button>
+  <button class="tab" data-tab="rules" role="tab">Rules</button>
+  <button class="tab" data-tab="help" role="tab">Setup</button>
+</nav>
+
+<main>
+
+<!-- ══════════════════════════════════════════════════════ PROCESS ══ -->
+<section id="tab-process" class="panel is-active">
+  <div id="drop" class="drop">
+    <div class="drop-inner">
+      <div class="drop-icon">📄</div>
+      <p class="drop-title">Drop your statement PDFs here</p>
+      <p class="drop-sub">One card at a time. Amex and CIBC supported today.</p>
+      <button id="pickBtn" class="btn">Choose files…</button>
+      <input id="fileInput" type="file" accept="application/pdf" multiple hidden>
+    </div>
+  </div>
+
+  <ul id="fileList" class="filelist"></ul>
+
+  <div class="actions">
+    <button id="runBtn" class="btn btn-primary" disabled>Analyze</button>
+    <button id="clearBtn" class="btn btn-ghost" disabled>Clear</button>
+  </div>
+
+  <div id="log" class="log" hidden></div>
+  <div id="result" class="result" hidden></div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ REVIEW ══ -->
+<section id="tab-review" class="panel">
+  <div class="card">
+    <h2>Apply your review decisions</h2>
+    <p class="muted">
+      Open the workbook this app filed into Drive, fill in the <strong>COMMENTS</strong> column on
+      the Review sheet with the category you want, save it, then load it back here. The app recodes
+      those rows, rebuilds the summary and redraws every highlighted statement.
+    </p>
+    <p class="muted small">
+      You need the same statement PDFs loaded on the Process tab first, so the highlighted files can
+      be redrawn. If you've just done a run in this session, they're already loaded.
+    </p>
+    <div class="actions">
+      <button id="reviewPickBtn" class="btn">Choose the reviewed workbook…</button>
+      <input id="reviewInput" type="file" accept=".xlsx" hidden>
+      <button id="reviewDriveBtn" class="btn btn-ghost">Load the last one from Drive</button>
+    </div>
+    <label class="check">
+      <input type="checkbox" id="learnCheck" checked>
+      Remember these decisions in my rules, so the same merchants are categorized automatically next time
+    </label>
+  </div>
+  <div id="reviewLog" class="log" hidden></div>
+  <div id="reviewResult" class="result" hidden></div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════ RULES ══ -->
+<section id="tab-rules" class="panel">
+  <div class="card">
+    <h2>Your rules</h2>
+    <p class="muted">
+      This is the brain of the app: which merchant maps to which category, the out-of-GTA meals rule,
+      which merchants always go to Review. Edit it here, or download it and commit it to your repo so
+      it travels with the app.
+    </p>
+    <p class="muted">
+      <strong>Your merchant list is kept out of GitHub.</strong> The repo is public, so the copy of
+      <code>rules.json</code> there ships with an empty merchant map. Use
+      <strong>Import a rules file</strong> to load <code>my-rules.json</code> — it's stored in this
+      browser and never uploaded. Do that once per browser you use.
+    </p>
+    <p class="muted small" id="rulesPrivacy"></p>
+    <div id="rulesSummary" class="rulestats"></div>
+    <textarea id="rulesText" spellcheck="false" aria-label="Rules JSON"></textarea>
+    <div class="actions">
+      <button id="rulesSaveBtn" class="btn btn-primary">Save</button>
+      <button id="rulesImportBtn" class="btn">Import a rules file…</button>
+      <input id="rulesImportInput" type="file" accept=".json" hidden>
+      <button id="rulesDownloadBtn" class="btn">Download rules.json</button>
+      <button id="rulesResetBtn" class="btn btn-ghost">Reset to the file in the repo</button>
+    </div>
+    <p id="rulesMsg" class="muted small"></p>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════ SETUP ══ -->
+<section id="tab-help" class="panel">
+  <div class="card">
+    <h2>One-time setup</h2>
+    <ol class="steps">
+      <li>
+        <strong>Put this folder in a GitHub repo.</strong> Create a repo called
+        <code>statement-filer</code>, upload every file from this folder, then go to
+        <em>Settings → Pages</em> and set the source to <em>Deploy from a branch → main → / (root)</em>.
+        A minute later your app is live at
+        <code>https://&lt;your-username&gt;.github.io/statement-filer/</code>.
+      </li>
+      <li>
+        <strong>Make a Google OAuth Client ID</strong> so the app can write to your Drive.
+        Go to <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a>
+        → create a project → <em>APIs &amp; Services</em> → enable the <em>Google Drive API</em> →
+        <em>Credentials</em> → <em>Create credentials → OAuth client ID</em> → application type
+        <em>Web application</em>. Under <em>Authorized JavaScript origins</em> add
+        <code>https://&lt;your-username&gt;.github.io</code>. Copy the Client ID.
+      </li>
+      <li>
+        <strong>Paste the Client ID into the app</strong> using the ⚙ button, top right. It's stored
+        in your browser only — it is not a password and it is safe to keep in a public repo, but the
+        app doesn't put it there for you.
+      </li>
+      <li>
+        <strong>Publish the consent screen or add yourself as a test user.</strong> While the app is
+        in "Testing" mode, only accounts listed under <em>Audience → Test users</em> can sign in. Add
+        your own Gmail address there.
+      </li>
+    </ol>
+    <h3>What it does with your Drive</h3>
+    <p class="muted">
+      The app asks for permission to see and manage your Drive files. It needs the broad scope because
+      it has to find your existing <code>Annual Audit … Sep</code> folder — an app-only scope cannot see
+      folders it didn't create. It only ever writes inside
+      <code>Annual Audit … Sep / Credit Card Statements /</code>. Your statements are read inside your
+      own browser tab and go straight to your Drive; there is no server in the middle, and nothing is
+      stored anywhere else.
+    </p>
+    <h3>Where files land</h3>
+<pre class="tree">Annual Audit 2026 Sep
+└── Credit Card Statements
+    └── Amex
+        └── Q3 2026
+            ├── Q3 2026 Amex Transactions.xlsx
+            ├── Abridged Statements/
+            │   └── (the statements you dropped)
+            └── Expenses Summary/
+                ├── Amex Q3 2026 Meals.pdf
+                ├── Amex Q3 2026 Business Travel.pdf
+                └── … one per category</pre>
+  </div>
+</section>
+
+</main>
+
+<!-- ═════════════════════════════════════════════════════ SETTINGS ══ -->
+<dialog id="settings">
+  <form method="dialog">
+    <h2>Settings</h2>
+    <label class="field">
+      <span>Google OAuth Client ID</span>
+      <input id="clientId" type="text" placeholder="1234-abcd.apps.googleusercontent.com" autocomplete="off">
+      <small>Stored in this browser only. See the Setup tab for how to make one.</small>
+    </label>
+    <label class="field">
+      <span>Fiscal year-end month</span>
+      <select id="fyMonth">
+        <option value="9">September</option>
+        <option value="12">December</option>
+        <option value="3">March</option>
+        <option value="6">June</option>
+      </select>
+      <small>Decides which <em>Annual Audit</em> folder a quarter belongs to.</small>
+    </label>
+    <div class="actions">
+      <button value="save" class="btn btn-primary">Save</button>
+      <button value="cancel" class="btn btn-ghost">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="vendor/exceljs.min.js"></script>
+<script src="vendor/pdf-lib.min.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# Statements carry your name, address and account number. Never commit them.
+samples/*
+!samples/README.md
+
+# Your merchant map is personal data; import it through the app's Rules tab instead.
+my-rules.json
+
+node_modules/
+test/out/
+test/expected.json

@@ -1,0 +1,185 @@
+{
+ "_readme": [
+  "This file is the brain of the app. Edit it here or in the app's Rules tab.",
+  "The merchant map ships EMPTY on purpose - merchant names are personal data and this",
+  "repo is public. Load my-rules.json (kept off GitHub) once via the Rules tab and it",
+  "lives in your browser from then on.",
+  "merchants: exact statement description (without the city) -> category.",
+  "alwaysReview: descriptions that should always land on the Review sheet for you to decide.",
+  "spendCategoryDefaults: fallback for new merchants, using the bank's own spend category.",
+  "gtaRule: meals outside the GTA become business travel.",
+  "Anything the rules cannot settle goes to the Review sheet - it is never guessed silently."
+ ],
+ "version": 1,
+ "fiscalYearEndMonth": 9,
+ "fiscalFolderTemplate": "Annual Audit {fy} Sep",
+ "driveRoot": [
+  "Annual Audit {fy} Sep",
+  "Credit Card Statements"
+ ],
+ "reviewCategory": "Review",
+ "highlightColor": [
+  0.988,
+  0.957,
+  0.522
+ ],
+ "cards": {
+  "amex": {
+   "label": "Amex",
+   "driveFolder": "Amex",
+   "detect": [
+    "American Express",
+    "Aeroplan"
+   ],
+   "workbookName": "{quarter} Amex Transactions.xlsx",
+   "categoryFileName": "Amex {quarter} {category}.pdf",
+   "summaryFolder": "Expenses Summary",
+   "statementsFolder": "Abridged Statements",
+   "sheets": {
+    "summary": "CAD EXP SUMMARY",
+    "data": "CAD EXPENSES",
+    "fx": "USD EXPENSES",
+    "review": "Review"
+   },
+   "dataHeaders": [
+    "Date",
+    "Description",
+    "Amount",
+    "Category"
+   ],
+   "summaryHeaders": [
+    "Row Labels",
+    "Sum of Amount"
+   ],
+   "headerStyle": "blueText",
+   "controlTotalLabel": "{date} statement - total new transactions"
+  },
+  "cibc": {
+   "label": "CIBC",
+   "driveFolder": "CIBC",
+   "detect": [
+    "CIBC",
+    "Costco World Mastercard"
+   ],
+   "workbookName": "CIBC {quarter} Transactions.xlsx",
+   "categoryFileName": "CIBC {quarter} {category}.pdf",
+   "summaryFolder": "Expense Summary",
+   "statementsFolder": "Abridged Statements",
+   "sheets": {
+    "summary": "Summary",
+    "data": "Data",
+    "review": "Review"
+   },
+   "dataHeaders": [
+    "TRANSACTION DATE",
+    "TRANSACTION DETAILS",
+    "PERSONAL CATEGORIES",
+    "AMOUNT"
+   ],
+   "summaryHeaders": [
+    "Row Labels",
+    "Sum of AMOUNT"
+   ],
+   "headerStyle": "blueFill",
+   "controlTotalLabel": "{date} statement - total for card"
+  }
+ },
+ "merchants": {
+  "amex": {},
+  "cibc": {}
+ },
+ "alwaysReview": [],
+ "spendCategoryDefaults": {
+  "Restaurants": "Meals",
+  "Retail and Grocery": "Meals",
+  "Transportation": "Travel",
+  "Personal and Household Expenses": "Meals",
+  "Health and Education": "Personal",
+  "Hotel, Entertainment and Recreation": "Review",
+  "Foreign Currency Transactions": "Review"
+ },
+ "gtaRule": {
+  "enabled": true,
+  "note": "Meals outside the GTA are business travel; meals in Toronto and the surrounding GTA municipalities stay under Meals.",
+  "fromCategories": [
+   "Meals"
+  ],
+  "toCategory": "Business Travel",
+  "gtaPlaces": [
+   "TORONTO",
+   "NORTH YORK",
+   "ETOBICOKE",
+   "SCARBOROUGH",
+   "EAST YORK",
+   "YORK",
+   "MISSISSAUGA",
+   "BRAMPTON",
+   "MARKHAM",
+   "UNIONVILLE",
+   "VAUGHAN",
+   "THORNHILL",
+   "WOODBRIDGE",
+   "CONCORD",
+   "RICHMOND HILL",
+   "AURORA",
+   "NEWMARKET",
+   "OAKVILLE",
+   "MILTON",
+   "PICKERING",
+   "AJAX",
+   "WHITBY",
+   "OSHAWA",
+   "STOUFFVILLE",
+   "CALEDON",
+   "MAPLE",
+   "KING CITY"
+  ],
+  "outsidePlaces": [
+   "MONTREAL",
+   "MONTRÉAL",
+   "DORVAL",
+   "QUEBEC",
+   "LAVAL",
+   "GATINEAU",
+   "GANDER",
+   "CORNER BROOK",
+   "BRADFORD",
+   "BARRIE",
+   "KINGSTON",
+   "OTTAWA",
+   "LONDON",
+   "HAMILTON",
+   "WATERLOO",
+   "KITCHENER",
+   "GUELPH",
+   "NIAGARA",
+   "COLLINGWOOD",
+   "MUSKOKA",
+   "HUNTSVILLE",
+   "VANCOUVER",
+   "CALGARY",
+   "EDMONTON",
+   "WINNIPEG",
+   "HALIFAX",
+   "VICTORIA",
+   "BURNABY",
+   "NEW YORK",
+   "CHICAGO",
+   "BOSTON",
+   "MIAMI",
+   "LOS ANGELES",
+   "SAN FRANCISCO",
+   "PHOENIX",
+   "LONDON UK"
+  ],
+  "addressArtifacts": {
+   "SKIPTHEDISHES": "Bills from its Winnipeg head office; the order was a local delivery.",
+   "HELP.UBER.COM": "Uber's billing address, not where the ride happened."
+  }
+ },
+ "largeAmountReview": {
+  "enabled": true,
+  "note": "Charges at or above this amount from a merchant seen for the first time go to Review.",
+  "threshold": 500
+ }
+}
