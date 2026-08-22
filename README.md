@@ -142,7 +142,11 @@ at first and learns your answers as you go.
 | `spendCategoryDefaults` | For merchants seen for the first time, falls back to the bank's own spend category (CIBC prints one on every line). |
 | `gtaRule` | Meals outside the GTA become Business Travel. Two lists of place names decide which is which — add a city to whichever list it belongs in. |
 | `largeAmountReview` | A charge over this amount from a merchant never seen before goes to Review even if a fallback rule would have caught it. |
-| `cards` | Per-card file naming, folder names and sheet names, so each card's output matches what's already in your audit folder. |
+| `cards` | Per-card file naming, folder names and sheet names, so each card's output matches what's already in your audit folder. `gtaToCategory` lets a card name its own out-of-GTA bucket — Rogers uses `Travel`, Amex and CIBC use `Business Travel`. |
+
+When a merchant is new to one card but you've already ruled on it on another, the Review
+sheet says so and pre-fills the SUGGESTED CATEGORY — but it still waits for you. It is never
+applied across cards on its own, and only offered when every other card agrees.
 
 Edits made in the Rules tab live in that browser. Click **Download rules.json** and commit
 it to your repo to make them permanent and available everywhere.
@@ -162,11 +166,19 @@ confident is worse than a question.
 |---|---|
 | Amex (Aeroplan Reserve) | Working — verified against your Q3 2026 statements |
 | CIBC (Costco World Mastercard) | Working — verified against your Q3 2026 statements |
-| Canadian Tire, CI Financial, Rogers, TD Bank | Not yet — send a sample statement and it's a small addition |
+| Rogers (Red World Elite Mastercard) | Working — verified against your Jul and Aug 2026 statements |
+| Canadian Tire, CI Financial, TD Bank | Not yet — send a sample statement and it's a small addition |
 
-Both working parsers were checked by running the app against your real Jul and Aug 2026
-statements and confirming the output matches the workbooks you'd already signed off — every
-category, to the cent, on both cards.
+Each parser was checked by running the app against your real statements and confirming it
+ties to the statement's own control totals to the cent. For Amex and CIBC the category split
+also matches the workbooks you'd already signed off, every category, exactly.
+
+Rogers reconciles on **both sides**, which is stronger than the other two allow: the
+statement prints *New purchases & debits* and *Payments & credits* separately, so the
+positive rows have to tie to the first and the negative rows to the second. Payments of the
+card balance are dropped (they aren't an expense); refunds and cash-back rebates are kept as
+negative rows so they reduce whichever category they belong to, and the control total is
+adjusted by the payments removed so a missed row still shows up as a variance.
 
 ---
 
@@ -202,6 +214,7 @@ js/
     base.js         pdf.js word/row extraction shared by all parsers
     amex.js
     cibc.js
+    rogers.js
     registry.js     detection + lookup
 vendor/             pdf.js, ExcelJS, pdf-lib
 test/               Playwright harness (npm install, then node test/run.mjs)

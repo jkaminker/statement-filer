@@ -82,11 +82,43 @@
    ],
    "headerStyle": "blueFill",
    "controlTotalLabel": "{date} statement - total for card"
+  },
+  "rogers": {
+   "label": "Rogers",
+   "driveFolder": "Rogers",
+   "detect": [
+    "Rogers Bank",
+    "rogersbank.com"
+   ],
+   "workbookName": "Rogers {quarter} Transactions.xlsx",
+   "categoryFileName": "Rogers {quarter} {category}.pdf",
+   "summaryFolder": "Expense Summary",
+   "statementsFolder": "Abridged Statements",
+   "sheets": {
+    "summary": "Summary",
+    "data": "CAD Expenses",
+    "fx": "Travel",
+    "review": "Review"
+   },
+   "dataHeaders": [
+    "Date",
+    "Merchant Name",
+    "Category",
+    "Amount"
+   ],
+   "summaryHeaders": [
+    "Row Labels",
+    "Sum of Amount"
+   ],
+   "headerStyle": "blueText",
+   "gtaToCategory": "Travel",
+   "controlTotalLabel": "{date} statement - new purchases, net of credits"
   }
  },
  "merchants": {
   "amex": {},
-  "cibc": {}
+  "cibc": {},
+  "rogers": {}
  },
  "alwaysReview": [],
  "spendCategoryDefaults": {
@@ -100,7 +132,7 @@
  },
  "gtaRule": {
   "enabled": true,
-  "note": "Meals outside the GTA are business travel; meals in Toronto and the surrounding GTA municipalities stay under Meals.",
+  "note": "Meals outside the GTA are recoded to {travelCategory}; meals in Toronto and the surrounding GTA municipalities stay under Meals.",
   "fromCategories": [
    "Meals"
   ],
