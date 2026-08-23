@@ -284,3 +284,61 @@ export async function readReviewedWorkbook(ExcelJS, arrayBuffer, card, rules) {
 
   return { rowDecisions, merchantDecisions, rows };
 }
+
+/**
+ * Read a workbook this app filed in an earlier run, so a later drop can merge
+ * into it instead of replacing it.
+ *
+ * Two things come back. The Data rows carry categories you have already settled
+ * — they are taken as final and never re-categorized. The reconciliation block
+ * tells us which statements the quarter already covers, and that list is what
+ * makes re-dropping a statement harmless: a statement already named there is
+ * skipped whole rather than having its rows matched one by one.
+ */
+export async function readFiledWorkbook(ExcelJS, arrayBuffer, card, rules) {
+  const cfg = rules.cards[card];
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(arrayBuffer);
+
+  const data = wb.getWorksheet(cfg.sheets.data);
+  const sum = wb.getWorksheet(cfg.sheets.summary);
+  if (!data) throw new Error(`That workbook has no "${cfg.sheets.data}" sheet.`);
+
+  const isAmex = card === 'amex';
+  const rows = [];
+  data.eachRow((row, n) => {
+    if (n === 1) return;
+    const d = row.getCell(1).value;
+    if (!(d instanceof Date)) return;
+    const amount = Number(row.getCell(isAmex ? 3 : 4).value);
+    if (!Number.isFinite(amount)) return;
+    rows.push({
+      date: d.toISOString().slice(0, 10),
+      desc: String(row.getCell(2).value || ''),
+      category: String(row.getCell(isAmex ? 4 : 3).value || ''),
+      amount: Math.round(amount * 100) / 100,
+      filed: true,
+    });
+  });
+
+  // pull the per-statement control totals back out of the reconciliation block
+  // by running the card's label template backwards
+  const statements = [];
+  if (sum) {
+    const tpl = String(cfg.controlTotalLabel || '{date} statement');
+    const re = new RegExp('^' + tpl.split('{date}').map(escapeRe).join('(.+)') + '$');
+    sum.eachRow((row) => {
+      const label = String(row.getCell(1).value || '').trim();
+      const m = label.match(re);
+      if (!m) return;
+      const v = row.getCell(2).value;
+      const controlTotal = Number(v && typeof v === 'object' ? v.result : v);
+      if (Number.isFinite(controlTotal)) statements.push({ label: m[1].trim(), controlTotal });
+    });
+  }
+  return { rows, statements };
+}
+
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

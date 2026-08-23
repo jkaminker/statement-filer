@@ -152,7 +152,12 @@ async function doRun() {
   $('result').hidden = true;
   $('runBtn').disabled = true;
   try {
-    lastResult = await runPipeline(files, rules, libs(), (m) => logTo(log, m));
+    lastResult = await runPipeline(files, rules, libs(), (m) => logTo(log, m), {
+      // merge by default: if this card and quarter are already filed, add to it
+      fetchFiled: drive.isSignedIn()
+        ? (card, quarter, fy) => drive.fetchFiled(card, quarter, fy, rules, (m) => logTo(log, m))
+        : null,
+    });
     logTo(log, 'Done.');
     renderResult(lastResult, $('result'), false);
     publishForTests(lastResult);

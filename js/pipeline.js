@@ -3,7 +3,7 @@
 import { readPages, quarterOf, fiscalYearOf } from './parsers/base.js';
 import { detectCard, parserFor } from './parsers/registry.js';
 import { categorize, summarize, applyGtaRule, canonicalCategory } from './rules.js';
-import { buildWorkbook } from './workbook.js';
+import { buildWorkbook, readFiledWorkbook } from './workbook.js';
 import { buildCategoryPdfs, buildAbridgedStatements } from './highlight.js';
 
 /**
@@ -12,7 +12,7 @@ import { buildCategoryPdfs, buildAbridgedStatements } from './highlight.js';
  * @param {object} libs           {pdfjsLib, ExcelJS, PDFLib}
  * @param {function} onProgress   (message) => void
  */
-export async function run(files, rules, libs, onProgress = () => {}) {
+export async function run(files, rules, libs, onProgress = () => {}, opts = {}) {
   const { pdfjsLib, ExcelJS, PDFLib } = libs;
   const sources = [];
 
@@ -62,16 +62,62 @@ export async function run(files, rules, libs, onProgress = () => {}) {
   const quarter = dominant(all.map((t) => quarterOf(t.date)));
   const fiscalYear = fiscalYearOf(all[all.length - 1].date, rules.fiscalYearEndMonth);
 
+  // ------------------------------------------- 2b. merge with what's filed
+  // A quarter is built up over several drops. If this card and quarter already
+  // have a workbook, its rows and statements come along so the new statement is
+  // ADDED to the quarter rather than replacing it. De-duplication is by
+  // statement, not by row: a statement already named in the filed
+  // reconciliation block is skipped whole, which makes re-dropping one a no-op.
+  let filedRows = [];
+  let filedStatements = [];
+  let basePdfs = null;
+  const skipped = [];
+  if (typeof opts.fetchFiled === 'function') {
+    try {
+      const filed = await opts.fetchFiled(card, quarter, fiscalYear);
+      if (filed && filed.workbookBytes) {
+        const prior = await readFiledWorkbook(ExcelJS, filed.workbookBytes, card, rules);
+        filedRows = prior.rows;
+        filedStatements = prior.statements;
+        basePdfs = filed.categoryPdfs || null;
+        const already = new Set(filedStatements.map((x) => x.label));
+        for (let i = sources.length - 1; i >= 0; i--) {
+          if (already.has(sources[i].parsed.statementLabel)) {
+            skipped.push(sources[i].parsed.statementLabel);
+            sources.splice(i, 1);
+          }
+        }
+        for (const label of skipped) {
+          onProgress(`${label} is already in the filed workbook — leaving those rows alone.`);
+        }
+      }
+    } catch (e) {
+      onProgress(`Could not read what's already filed (${e.message}). Building this quarter fresh.`);
+    }
+  }
+
+  const fresh = [];
+  for (const s of sources) {
+    for (const t of s.parsed.transactions) fresh.push({ ...t, source: s.name });
+  }
+
   // --------------------------------------------------------- 3. categorize
+  // only the new rows: anything already filed carries the category you settled
   onProgress('Categorizing…');
-  const { review, flags } = categorize(all, card, rules);
+  const { review, flags } = categorize(fresh, card, rules);
+  const merged = [...filedRows, ...fresh].sort(
+    (a, b) => a.date.localeCompare(b.date) || a.desc.localeCompare(b.desc)
+  );
 
   // --------------------------------------------------- 4. reconcile & check
-  const parsedTotal = round2(all.reduce((s, t) => s + t.amount, 0));
-  const statements = sources.map((s) => ({
-    label: s.parsed.statementLabel,
-    controlTotal: s.parsed.controlTotal,
-  }));
+  const parsedTotal = round2(merged.reduce((s, t) => s + t.amount, 0));
+  const statements = [
+    ...filedStatements,
+    ...sources.map((s) => ({
+      label: s.parsed.statementLabel,
+      controlTotal: s.parsed.controlTotal,
+    })),
+  ];
   const controlTotal = round2(
     statements.reduce((s, x) => s + (x.controlTotal || 0), 0)
   );
@@ -86,13 +132,24 @@ export async function run(files, rules, libs, onProgress = () => {}) {
       + 'which holds the majority of the transactions.'
     );
   }
+  if (filedRows.length) {
+    notes.push(
+      `Added to the ${quarter} workbook already in Drive: ${filedRows.length} row`
+      + `${filedRows.length === 1 ? '' : 's'} carried forward from `
+      + `${filedStatements.map((x) => x.label).join(' & ')}, `
+      + `${fresh.length} new row${fresh.length === 1 ? '' : 's'} from this run.`
+    );
+  }
+  if (skipped.length) {
+    notes.push(`${skipped.join(' & ')} ${skipped.length === 1 ? 'was' : 'were'} already filed and ${skipped.length === 1 ? 'was' : 'were'} not added again.`);
+  }
   const wb = await buildWorkbook(ExcelJS, {
-    card, quarter, transactions: all, review, flags, statements, rules, notes,
+    card, quarter, transactions: merged, review, flags, statements, rules, notes,
   });
   const workbookBytes = new Uint8Array(await wb.xlsx.writeBuffer());
 
   onProgress('Highlighting the statements…');
-  const categoryPdfs = await buildCategoryPdfs(PDFLib, sources, all, rules, card, quarter);
+  const categoryPdfs = await buildCategoryPdfs(PDFLib, sources, fresh, rules, card, quarter, basePdfs);
   const abridged = await buildAbridgedStatements(PDFLib, sources);
 
   return {
@@ -101,10 +158,11 @@ export async function run(files, rules, libs, onProgress = () => {}) {
     quarter,
     fiscalYear,
     sources,
-    transactions: all,
+    transactions: merged,
+    merged: { carried: filedRows.length, added: fresh.length, skipped },
     review,
     flags,
-    summary: summarize(all),
+    summary: summarize(merged),
     parsedTotal,
     controlTotal,
     variance,

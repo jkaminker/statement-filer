@@ -36,7 +36,7 @@ export async function buildAbridgedStatements(PDFLib, sources) {
   return out;
 }
 
-export async function buildCategoryPdfs(PDFLib, sources, transactions, rules, card, quarter) {
+export async function buildCategoryPdfs(PDFLib, sources, transactions, rules, card, quarter, basePdfs = null) {
   const { PDFDocument, PDFString } = PDFLib;
   const cfg = rules.cards[card];
   const [cr, cg, cb] = rules.highlightColor || [0.988, 0.957, 0.522];
@@ -51,6 +51,17 @@ export async function buildCategoryPdfs(PDFLib, sources, transactions, rules, ca
   for (const category of Object.keys(byCategory).sort()) {
     const rows = byCategory[category];
     const doc = await PDFDocument.create();
+
+    // When a quarter is being added to rather than built fresh, start from the
+    // copy already filed so the lines marked up last time stay marked up — the
+    // statements behind them aren't in this run and can't be redrawn.
+    let carried = 0;
+    if (basePdfs && basePdfs[category]) {
+      const prior = await PDFDocument.load(basePdfs[category]);
+      const copied = await doc.copyPages(prior, prior.getPageIndices());
+      copied.forEach((p) => doc.addPage(p));
+      carried = copied.length;
+    }
 
     // keep only the transaction pages, in statement order, and remember where
     // each original page landed in the combined document
@@ -105,6 +116,7 @@ export async function buildCategoryPdfs(PDFLib, sources, transactions, rules, ca
         .replace('{category}', category),
       bytes,
       lines,
+      carriedPages: carried,
       total: Math.round(rows.reduce((s, t) => s + t.amount, 0) * 100) / 100,
     });
   }

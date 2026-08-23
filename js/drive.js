@@ -216,3 +216,46 @@ export async function fileRun(result, rules, onProgress = () => {}) {
     path: [...trail.map((t) => t.name), cfg.driveFolder, result.quarter].join(' / '),
   };
 }
+
+/**
+ * Look up what this card+quarter already has filed, so a later drop can merge
+ * into it. Returns null when the quarter is new — nothing to merge with.
+ * Never creates anything: this runs at Analyze time, before you've committed.
+ */
+export async function fetchFiled(card, quarter, fiscalYear, rules, onProgress = () => {}) {
+  const cfg = rules.cards[card];
+  const rootNames = rules.driveRoot.map((n) => n.replace('{fy}', fiscalYear));
+
+  let parent = null;
+  for (const n of rootNames) {
+    parent = await findFolder(n, parent);
+    if (!parent) return null;
+  }
+  const cardFolder = await findFolder(cfg.driveFolder, parent);
+  if (!cardFolder) return null;
+  const quarterFolder = await findFolder(quarter, cardFolder);
+  if (!quarterFolder) return null;
+
+  const wbName = cfg.workbookName.replace('{quarter}', quarter);
+  const wbFile = await findFile(wbName, quarterFolder);
+  if (!wbFile) return null;
+
+  onProgress(`Found ${wbName} already filed — reading it so this run adds to it.`);
+  const workbookBytes = await downloadFile(wbFile.id);
+
+  // the highlighted PDFs for categories already filed, so new lines can be
+  // appended to them rather than replacing the pages already marked up
+  const categoryPdfs = {};
+  const sumFolder = await findFolder(cfg.summaryFolder, quarterFolder);
+  if (sumFolder) {
+    const q = encodeURIComponent(`'${sumFolder}' in parents and trashed = false`);
+    const res = await api(`/files?q=${q}&fields=files(id,name)&pageSize=200`);
+    const prefix = cfg.categoryFileName.replace('{quarter}', quarter).replace('{category}', '');
+    for (const f of res.files || []) {
+      if (!f.name.endsWith('.pdf')) continue;
+      const category = f.name.replace(prefix.replace(/\.pdf$/, ''), '').replace(/\.pdf$/, '').trim();
+      if (category) categoryPdfs[category] = await downloadFile(f.id);
+    }
+  }
+  return { workbookBytes, categoryPdfs, quarterFolderId: quarterFolder };
+}
