@@ -2,7 +2,7 @@
 
 import { readPages, quarterOf, fiscalYearOf } from './parsers/base.js';
 import { detectCard, parserFor } from './parsers/registry.js';
-import { categorize, summarize } from './rules.js';
+import { categorize, summarize, applyGtaRule, canonicalCategory } from './rules.js';
 import { buildWorkbook } from './workbook.js';
 import { buildCategoryPdfs, buildAbridgedStatements } from './highlight.js';
 
@@ -129,10 +129,13 @@ export async function applyReview(previous, decisions, rules, libs, onProgress =
   const clean = (s) => String(s || '').replace(/ /g, '').replace(/\s+/g, ' ').trim();
   const rowKey = (d, desc, amt) => `${d}|${clean(desc)}|${round2(amt)}`;
 
+  // "professional fees" and "Professional Fees" are the same answer
+  const canon = (c) => canonicalCategory(c, rules, previous.transactions);
+
   const pending = new Map();
-  for (const d of rowDecisions) pending.set(rowKey(d.date, d.desc, d.amount), d.category);
+  for (const d of rowDecisions) pending.set(rowKey(d.date, d.desc, d.amount), canon(d.category));
   const byMerchant = new Map();
-  for (const d of merchantDecisions) byMerchant.set(clean(d.desc).toUpperCase(), d.category);
+  for (const d of merchantDecisions) byMerchant.set(clean(d.desc).toUpperCase(), canon(d.category));
 
   let applied = 0;
   const moved = [];
@@ -154,6 +157,11 @@ export async function applyReview(previous, decisions, rules, libs, onProgress =
     }
   }
 
+  // the out-of-GTA meals rule is a standing rule, so it gets the last word here
+  // too: the Review sheet asks for a category without showing where the charge
+  // happened, so a meal in cottage country would otherwise stay under Meals
+  const gta = applyGtaRule(previous.transactions, previous.card, rules);
+
   const stillReview = previous.transactions.filter((t) => t.category === reviewCat);
 
   onProgress('Rebuilding the workbook…');
@@ -165,13 +173,19 @@ export async function applyReview(previous, decisions, rules, libs, onProgress =
   if (stillReview.length) {
     notes.push(`${stillReview.length} item${stillReview.length === 1 ? ' is' : 's are'} still in Review.`);
   }
+  if (gta.moved.length) {
+    notes.push(
+      `${gta.moved.length} meal${gta.moved.length === 1 ? '' : 's'} outside the GTA `
+      + `moved to ${gta.moved[0].to}: ${gta.moved.map((m) => `${m.desc} (${m.place})`).join(', ')}.`
+    );
+  }
 
   const wb = await buildWorkbook(ExcelJS, {
     card: previous.card,
     quarter: previous.quarter,
     transactions: previous.transactions,
     review: stillReview.map((t) => ({ ...t, suggested: '', note: 'Still awaiting a decision.' })),
-    flags: previous.flags,
+    flags: gta.flags,
     statements: previous.statements,
     rules,
     notes,
@@ -186,6 +200,8 @@ export async function applyReview(previous, decisions, rules, libs, onProgress =
     ...previous,
     applied,
     moved,
+    gtaMoved: gta.moved,
+    flags: gta.flags,
     review: stillReview,
     summary: summarize(previous.transactions),
     workbook: {

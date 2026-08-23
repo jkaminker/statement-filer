@@ -156,8 +156,14 @@ export async function buildWorkbook(ExcelJS, opts) {
   let rr = 4;
   for (const item of review.slice().sort((a, b) => a.date.localeCompare(b.date))) {
     const row = rev.getRow(rr);
+    // Rogers keeps the town in its own field, so it isn't in the description you
+    // see here. Lead the note with it — without it you'd be choosing a category
+    // for "TIM HORTONS #3025" with no way to know it was in Bracebridge.
+    const note = item.place
+      ? `${item.place}. ${item.note || ''}`.trim()
+      : (item.note || '');
     row.values = [new Date(item.date + 'T00:00:00'), item.desc, item.suggested || '',
-                  item.amount, item.note || '', ''];
+                  item.amount, note, ''];
     row.font = BODY_FONT;
     row.getCell(1).numFmt = DATE_FMT;
     row.getCell(4).numFmt = MONEY;

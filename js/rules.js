@@ -86,6 +86,78 @@ export function classifyPlace(desc, gtaRule, where) {
 }
 
 /**
+ * The out-of-GTA meals rule: a meal outside the GTA is business travel.
+ *
+ * It runs on a first pass AND again after you apply your review, because it is a
+ * standing rule, not a one-time guess — and the Review sheet asks you to name a
+ * category without showing you where the charge happened. Anything it moves is
+ * listed back to you.
+ *
+ * @returns {{moved:Array, flags:Array}}
+ */
+export function applyGtaRule(transactions, cardId, rules) {
+  const g = rules.gtaRule;
+  const moved = [];
+  const flags = [];
+  if (!g || !g.enabled) return { moved, flags };
+
+  // your Rogers workbooks call this category "Travel" where Amex and CIBC call
+  // it "Business Travel", so each card can name its own
+  const card = (rules.cards || {})[cardId] || {};
+  const travelCategory = card.gtaToCategory || g.toCategory;
+
+  for (const t of transactions) {
+    if (!(g.fromCategories || []).includes(t.category)) continue;
+    const where = classifyPlace(t.desc, g, t.place);
+    if (where === 'outside') {
+      moved.push({ desc: clean(t.desc), place: t.place || '', amount: t.amount, to: travelCategory });
+      t.category = travelCategory;
+      t.reason = 'meal outside the GTA';
+    } else if (where === 'artifact') {
+      flags.push({
+        desc: clean(t.desc),
+        category: t.category,
+        amount: t.amount,
+        note: g.addressArtifacts[
+          Object.keys(g.addressArtifacts).find((k) => clean(t.desc).toUpperCase().includes(k))
+        ],
+      });
+    } else if (where === null) {
+      flags.push({
+        desc: clean(t.desc),
+        category: t.category,
+        amount: t.amount,
+        note: (t.place ? `Location "${t.place}" is ` : 'Location ')
+            + 'not in the GTA list or the outside-GTA list in rules.json. '
+            + 'Left as is - add the city to rules.json to settle it for good.',
+      });
+    }
+  }
+  return { moved, flags };
+}
+
+/**
+ * Match what you typed in COMMENTS against the categories already in use, so
+ * "professional fees" lands in "Professional Fees" instead of opening a second
+ * category next to it. A genuinely new name is kept, just Title Cased.
+ */
+export function canonicalCategory(input, rules, transactions = []) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  const known = new Set();
+  for (const map of Object.values(rules.merchants || {})) {
+    for (const c of Object.values(map)) known.add(c);
+  }
+  for (const c of Object.values(rules.cards || {})) if (c.gtaToCategory) known.add(c.gtaToCategory);
+  if (rules.gtaRule && rules.gtaRule.toCategory) known.add(rules.gtaRule.toCategory);
+  for (const t of transactions) if (t.category) known.add(t.category);
+  for (const k of known) if (k.toLowerCase() === raw.toLowerCase()) return k;
+  return raw.replace(/\S+/g, (w) => (w.length > 3 || /^[A-Za-z]+$/.test(w)
+    ? w[0].toUpperCase() + w.slice(1).toLowerCase()
+    : w));
+}
+
+/**
  * Categorize a parsed statement's transactions.
  * @returns {{transactions:Array, review:Array, flags:Array}}
  *   each transaction gains {category, reason}
@@ -166,49 +238,22 @@ export function categorize(transactions, cardId, rules) {
   }
 
   // 5. the out-of-GTA meals rule, applied after everything else
-  const g = rules.gtaRule;
-  if (g && g.enabled) {
-    // your Rogers workbooks call this category "Travel" where Amex and CIBC call
-    // it "Business Travel", so each card can name its own
-    const card = rules.cards[cardId] || {};
-    const travelCategory = card.gtaToCategory || g.toCategory;
-    for (const t of transactions) {
-      if (!(g.fromCategories || []).includes(t.category)) continue;
-      const where = classifyPlace(t.desc, g, t.place);
-      if (where === 'outside') {
-        t.category = travelCategory;
-        t.reason = 'meal outside the GTA';
-      } else if (where === 'artifact') {
-        flags.push({
-          desc: clean(t.desc),
-          category: t.category,
-          amount: t.amount,
-          note: g.addressArtifacts[
-            Object.keys(g.addressArtifacts).find((k) => clean(t.desc).toUpperCase().includes(k))
-          ],
-        });
-      } else if (where === null) {
-        flags.push({
-          desc: clean(t.desc),
-          category: t.category,
-          amount: t.amount,
-          note: (t.place ? `Location "${t.place}" is ` : 'Location ')
-              + 'not in the GTA list or the outside-GTA list in rules.json. '
-              + 'Left as is - add the city to rules.json to settle it for good.',
-        });
-      }
-    }
-  }
+  flags.push(...applyGtaRule(transactions, cardId, rules).flags);
 
   return { transactions, review, flags };
 }
 
-/** Fold decisions from a reviewed workbook back into the rules so they stick. */
+/**
+ * Fold decisions from a reviewed workbook back into the rules so they stick.
+ * What gets stored is the canonical spelling — typing "professional fees" once
+ * must not leave a second category sitting next to "Professional Fees" forever.
+ */
 export function learn(rules, cardId, decisions) {
   rules.merchants[cardId] = rules.merchants[cardId] || {};
   let added = 0;
-  for (const { desc, category } of decisions) {
+  for (const { desc, category: raw } of decisions) {
     const key = merchantKey(desc);
+    const category = canonicalCategory(raw, rules);
     if (!key || !category) continue;
     if (rules.merchants[cardId][key] !== category) {
       rules.merchants[cardId][key] = category;
