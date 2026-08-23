@@ -88,6 +88,26 @@ doesn't put it there for you, so each browser you use needs it pasted once.
 
 ## Using it
 
+### A quarter is built up over several drops
+
+You don't have to wait for a quarter to end. Drop each statement as it arrives and
+the app **adds to the quarter already in Drive** rather than replacing it: it finds the
+filed workbook, carries its rows forward with the categories you'd settled, and appends
+the new statement's rows. The reconciliation block grows to list every statement that
+fed the quarter, so the variance check covers all of them.
+
+De-duplication is by **statement**, not by row. If a statement is already named in the
+filed workbook's reconciliation block, it's skipped whole — so re-dropping one you've
+already filed changes nothing rather than doubling it.
+
+The highlighted category PDFs work the same way: the copy in Drive is the starting point
+and the new statement's marked-up pages are appended, so lines highlighted on an earlier
+drop stay highlighted. A category with no new lines is left alone entirely.
+
+This needs Drive connected **before** you hit Analyze — that's when the app goes looking
+for what's already filed. Analyze without connecting and you'll get a workbook containing
+only what you just dropped, which would overwrite the quarter when you file it.
+
 ### Filing a new quarter
 
 1. Open the app, click **Connect Google Drive** (first time each session).
