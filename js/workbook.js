@@ -27,8 +27,10 @@ const BODY_FONT = { name: 'Calibri', size: 11 };
  *   review[], flags[], statements[{label, controlTotal}], rules, notes[]
  */
 export async function buildWorkbook(ExcelJS, opts) {
-  const { card, quarter, transactions, review, flags, statements, rules, notes = [] } = opts;
+  const { card, quarter, transactions, review, flags, statements, rules, notes = [],
+          outside = [], bounds = null } = opts;
   const cfg = rules.cards[card];
+  const outsideSheet = (cfg.sheets || {}).outside || 'Outside This Quarter';
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Statement Filer';
   wb.created = new Date();
@@ -129,13 +131,41 @@ export async function buildWorkbook(ExcelJS, opts) {
   sum.getCell(`B${r}`).font = { bold: true };
   const stmtRow = r;
   r++;
-  sum.getCell(`A${r}`).value = 'Variance vs. Grand Total';
+
+  // A statement period is not a quarter, so the Grand Total above covers only
+  // the quarter while the statements cover their own periods. The two tie only
+  // once the out-of-quarter rows are added back, and showing that sum here is
+  // what keeps the variance check meaningful: it still proves every line on
+  // every statement was parsed, even though the summary is scoped to a quarter.
+  const outsideTotal = round2(outside.reduce((s, t) => s + t.amount, 0));
+  sum.getCell(`A${r}`).value = `Grand Total (${quarter} only)`;
+  sum.getCell(`A${r}`).font = BODY_FONT;
+  sum.getCell(`B${r}`).value = { formula: `B${totalRow}` };
+  sum.getCell(`B${r}`).numFmt = MONEY;
+  sum.getCell(`B${r}`).font = BODY_FONT;
+  const inQuarterRow = r;
+  r++;
+  sum.getCell(`A${r}`).value = `Outside ${quarter} (see '${outsideSheet}')`;
+  sum.getCell(`A${r}`).font = BODY_FONT;
+  sum.getCell(`B${r}`).value = outsideTotal;
+  sum.getCell(`B${r}`).numFmt = MONEY;
+  sum.getCell(`B${r}`).font = BODY_FONT;
+  const outsideRow = r;
+  r++;
+  sum.getCell(`A${r}`).value = 'Quarter + outside';
   sum.getCell(`A${r}`).font = { bold: true };
-  sum.getCell(`B${r}`).value = { formula: `B${totalRow}-B${stmtRow}` };
+  sum.getCell(`B${r}`).value = { formula: `B${inQuarterRow}+B${outsideRow}` };
+  sum.getCell(`B${r}`).numFmt = MONEY;
+  sum.getCell(`B${r}`).font = { bold: true };
+  const accountedRow = r;
+  r++;
+  sum.getCell(`A${r}`).value = 'Variance vs. statements';
+  sum.getCell(`A${r}`).font = { bold: true };
+  sum.getCell(`B${r}`).value = { formula: `B${accountedRow}-B${stmtRow}` };
   sum.getCell(`B${r}`).numFmt = MONEY;
   sum.getCell(`B${r}`).font = { bold: true };
 
-  sum.getColumn(1).width = 30;
+  sum.getColumn(1).width = 34;
   sum.getColumn(2).width = 18;
 
   // ---------------------------------------------------------------- Review
@@ -203,6 +233,46 @@ export async function buildWorkbook(ExcelJS, opts) {
   }
 
   [16, 42, 22, 13, 70, 24].forEach((w, i) => { rev.getColumn(i + 1).width = w; });
+
+  // ------------------------------------------------- outside this quarter
+  // Charges that arrived on these statements but belong to a different quarter.
+  // They are kept — nothing is thrown away — but they are off the Data sheet,
+  // so no category total includes them.
+  if (outside.length) {
+    const out = wb.addWorksheet(outsideSheet);
+    out.getCell('A1').value = `Transactions on these statements that fall outside ${quarter}`;
+    out.getCell('A1').font = { bold: true, size: 12 };
+    out.getCell('A2').value =
+      (bounds ? `${quarter} runs ${bounds.from} to ${bounds.to}. ` : '')
+      + 'A statement period is not a quarter - the first statement of a quarter carries '
+      + 'charges from the end of the previous one. These rows are excluded from the '
+      + `${cfg.sheets.summary} totals and belong in the quarter named in the last column.`;
+    out.getCell('A2').font = NOTE_FONT;
+    out.getCell('A2').alignment = { wrapText: true, vertical: 'top' };
+
+    const oh = out.getRow(4);
+    oh.values = ['Date', 'Description', 'Amount', 'Category', 'Belongs to'];
+    styleHeader(oh, cfg.headerStyle);
+
+    let orow = 5;
+    for (const t of outside) {
+      const row = out.getRow(orow);
+      row.values = [new Date(t.date + 'T00:00:00'), t.desc, t.amount,
+                    t.category || '', quarterLabelOf(t.date)];
+      row.font = BODY_FONT;
+      row.getCell(1).numFmt = DATE_FMT;
+      row.getCell(3).numFmt = MONEY;
+      orow++;
+    }
+    out.getCell(`B${orow}`).value = 'Total outside this quarter';
+    out.getCell(`B${orow}`).font = { bold: true };
+    out.getCell(`C${orow}`).value = { formula: `SUM(C5:C${orow - 1})` };
+    out.getCell(`C${orow}`).numFmt = MONEY;
+    out.getCell(`C${orow}`).font = { bold: true };
+
+    [13, 45, 13, 22, 14].forEach((w, i) => { out.getColumn(i + 1).width = w; });
+    out.getRow(2).height = 30;
+  }
 
   // ----------------------------------------------- foreign-currency detail
   const fxRows = sorted.filter((t) => t.fx);
@@ -351,6 +421,30 @@ export async function readFiledWorkbook(ExcelJS, arrayBuffer, card, rules) {
     });
   }
 
+  // ------------------------------------------------ outside this quarter
+  // Rows a previous run set aside because they belong to another quarter. They
+  // have to come back or the next drop would rebuild the workbook without them
+  // and the reconciliation would stop tying to the statements.
+  const outside = [];
+  const outSheet = wb.getWorksheet((cfg.sheets || {}).outside || 'Outside This Quarter');
+  if (outSheet) {
+    outSheet.eachRow((row, n) => {
+      if (n < 5) return;
+      const d = row.getCell(1).value;
+      if (!(d instanceof Date)) return;
+      const amount = cellNumber(row.getCell(3).value);
+      if (!Number.isFinite(amount)) return;
+      outside.push({
+        date: isoOf(d),
+        desc: String(cellText(row.getCell(2).value) || ''),
+        amount: Math.round(amount * 100) / 100,
+        category: String(cellText(row.getCell(4).value) || ''),
+        filed: true,
+        outside: true,
+      });
+    });
+  }
+
   const rows = [];
   data.eachRow((row, n) => {
     if (n === 1) return;
@@ -394,11 +488,21 @@ export async function readFiledWorkbook(ExcelJS, arrayBuffer, card, rules) {
       if (Number.isFinite(controlTotal)) statements.push({ label: m[1].trim(), controlTotal });
     });
   }
-  return { rows, statements };
+  return { rows, statements, outside };
 }
 
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+/** Quarter label for an ISO date — kept local so this module stands alone. */
+function quarterLabelOf(iso) {
+  const [y, m] = String(iso).split('-').map(Number);
+  return `Q${Math.floor((m - 1) / 3) + 1} ${y}`;
 }
 
 // ─────────────────────────────────────────────────────────── cell helpers ──
