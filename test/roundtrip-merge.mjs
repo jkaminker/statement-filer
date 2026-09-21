@@ -165,5 +165,106 @@ const expected = [...july, ...august].reduce((s, t) => s + t.amount, 0);
 check(Math.abs(total - expected) < 0.005, 'merged total matches the sum of both months',
   `${total.toFixed(2)} vs ${expected.toFixed(2)}`);
 
+// ───────────────────────────────── the quarter is a quarter, not a statement ──
+// The July statement runs from roughly 18 June to 17 July, so it always carries
+// June charges. Those belong to Q2 and must not reach a single Q3 category.
+console.log('\n--- D. June charges on the July statement stay out of Q3');
+const { quarterBounds, inQuarter } = await import(path.join(ROOT, 'js/parsers/base.js'));
+
+const b = quarterBounds('Q3 2026');
+check(b.from === '2026-07-01' && b.to === '2026-09-30', 'Q3 2026 runs Jul 1 - Sep 30',
+  `${b.from} .. ${b.to}`);
+const b4 = quarterBounds('Q4 2026');
+check(b4.from === '2026-10-01' && b4.to === '2026-12-31', 'Q4 2026 runs Oct 1 - Dec 31',
+  `${b4.from} .. ${b4.to}`);
+const b1 = quarterBounds('Q1 2024');
+check(b1.to === '2024-03-31', 'a leap year still ends Q1 on Mar 31', b1.to);
+check(!inQuarter('2026-06-30', 'Q3 2026'), 'Jun 30 is outside Q3');
+check(inQuarter('2026-07-01', 'Q3 2026'), 'Jul 1 is inside Q3');
+check(inQuarter('2026-09-30', 'Q3 2026'), 'Sep 30 is inside Q3');
+check(!inQuarter('2026-10-01', 'Q3 2026'), 'Oct 1 is outside Q3');
+
+// a realistic July statement: a fortnight of June, then July
+const julyStatement = [
+  { date: '2026-06-21', desc: 'ESSO CIRCLE K', amount: 74.10, category: 'Fuel' },
+  { date: '2026-06-28', desc: 'LCBO #217', amount: 43.85, category: 'Meals' },
+  { date: '2026-07-02', desc: 'PRESTO FARE', amount: 3.35, category: 'Travel' },
+  { date: '2026-07-14', desc: 'STAPLES #118', amount: 128.99, category: 'Office Supplies' },
+];
+const inQ = julyStatement.filter((t) => inQuarter(t.date, 'Q3 2026'));
+const outQ = julyStatement.filter((t) => !inQuarter(t.date, 'Q3 2026'));
+check(inQ.length === 2 && outQ.length === 2, 'the statement splits 2 in / 2 out',
+  `${inQ.length} in, ${outQ.length} out`);
+
+const stmtTotal = round2(julyStatement.reduce((s, t) => s + t.amount, 0));
+const q3Bytes2 = await bytesOf({
+  card: 'amex', quarter: 'Q3 2026', transactions: inQ, review: [], flags: [],
+  statements: [{ label: 'Jul 17 2026', controlTotal: stmtTotal }],
+  rules, notes: [], outside: outQ, bounds: b,
+});
+
+const wb2 = new ExcelJS.Workbook();
+await wb2.xlsx.load(q3Bytes2);
+
+// the summary must not know about June at all
+const sum2 = wb2.getWorksheet(rules.cards.amex.sheets.summary);
+const catCells = [];
+sum2.eachRow((row, n) => { if (n >= 4) catCells.push(String(row.getCell(1).value || '')); });
+check(!catCells.includes('Fuel'), 'Fuel (a June-only category) is absent from the summary',
+  catCells.filter(Boolean).slice(0, 8).join(', '));
+
+const data2 = wb2.getWorksheet(rules.cards.amex.sheets.data);
+let dataDates = [];
+data2.eachRow((row, n) => {
+  if (n === 1) return;
+  const d = row.getCell(1).value;
+  if (d instanceof Date) dataDates.push(d.toISOString().slice(0, 10));
+});
+check(dataDates.every((d) => d >= '2026-07-01'), 'no June row reaches the Data sheet',
+  dataDates.join(', '));
+check(dataDates.length === 2, 'the Data sheet holds exactly the two July rows',
+  `${dataDates.length}`);
+
+const outSheet = wb2.getWorksheet('Outside This Quarter');
+check(!!outSheet, 'the outside-quarter sheet exists');
+let outRows = 0;
+let outSum = 0;
+outSheet?.eachRow((row, n) => {
+  if (n < 5) return;
+  const d = row.getCell(1).value;
+  if (!(d instanceof Date)) return;
+  outRows++;
+  outSum += Number(row.getCell(3).value) || 0;
+});
+check(outRows === 2, 'both June rows are listed there', `${outRows}`);
+check(Math.abs(round2(outSum) - 117.95) < 0.005, 'and they total the June amount',
+  round2(outSum).toFixed(2));
+
+// the reconciliation identity: quarter + outside === statements
+const inTotal = round2(inQ.reduce((s, t) => s + t.amount, 0));
+const outTotal = round2(outQ.reduce((s, t) => s + t.amount, 0));
+check(Math.abs(inTotal + outTotal - stmtTotal) < 0.005,
+  'quarter + outside ties to the statement control total',
+  `${inTotal} + ${outTotal} vs ${stmtTotal}`);
+
+// and it survives a read back, so the next drop doesn't lose the June rows
+const back2 = await readFiledWorkbook(ExcelJS, q3Bytes2, 'amex', rules);
+check(back2.rows.length === 2, 'reading back gives 2 in-quarter rows', `${back2.rows.length}`);
+check((back2.outside || []).length === 2, 'and 2 outside rows',
+  `${(back2.outside || []).length}`);
+
+// ──────────────────────────────────────────── statement naming convention ──
+console.log('\n--- E. statements are filed under your naming convention');
+const { statementFileName } = await import(path.join(ROOT, 'js/pipeline.js'));
+const amexName = statementFileName(rules, 'amex', { statementDate: '2026-07-17' });
+check(amexName === 'Amex Jul 17 2026 Statement.pdf', 'Amex', amexName);
+const cibcName = statementFileName(rules, 'cibc', { statementDate: '2026-06-13' });
+check(cibcName === 'CIBC Statement - Jun 13 2026.pdf', 'CIBC', cibcName);
+const singleDigit = statementFileName(rules, 'amex', { statementDate: '2026-08-05' });
+check(singleDigit === 'Amex Aug 5 2026 Statement.pdf', 'a single-digit day is not padded',
+  singleDigit);
+
+function round2(n) { return Math.round(n * 100) / 100; }
+
 console.log(failures ? `\n${failures} check(s) failed.` : '\nAll checks passed.');
 process.exit(failures ? 1 : 0);
