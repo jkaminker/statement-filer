@@ -27,6 +27,7 @@
 <nav class="tabs" role="tablist">
   <button class="tab is-active" data-tab="process" role="tab">1 · Process statements</button>
   <button class="tab" data-tab="review" role="tab">2 · Apply my review</button>
+  <button class="tab" data-tab="filed" role="tab">What's filed</button>
   <button class="tab" data-tab="rules" role="tab">Rules</button>
   <button class="tab" data-tab="help" role="tab">Setup</button>
 </nav>
@@ -46,6 +47,51 @@
   </div>
 
   <ul id="fileList" class="filelist"></ul>
+
+  <!-- what the app worked out from the PDFs, and what Drive already has, shown
+       before you commit to anything -->
+  <div id="preflight" class="card preflight" hidden>
+    <div class="pf-head">
+      <h2 id="pfTitle">Reading the statements…</h2>
+      <span id="pfBadge" class="pill pill-off" hidden></span>
+    </div>
+
+    <div id="pfBody" hidden>
+      <dl class="pf-facts">
+        <div>
+          <dt>Statements</dt>
+          <dd id="pfStatements"></dd>
+        </div>
+        <div>
+          <dt>File under</dt>
+          <dd>
+            <select id="pfQuarter" class="mini-select"></select>
+            <span id="pfQuarterNote" class="muted small"></span>
+          </dd>
+        </div>
+        <div>
+          <dt>Folder</dt>
+          <dd id="pfPath" class="mono small"></dd>
+        </div>
+      </dl>
+
+      <div id="pfFiled" class="pf-filed"></div>
+
+      <fieldset id="pfMode" class="pf-mode">
+        <legend>What should Analyze do?</legend>
+        <label class="pf-radio">
+          <input type="radio" name="runMode" value="append" checked>
+          <span><strong>Add to this quarter</strong>
+            <em id="pfAppendHint">Keeps everything already filed and adds these statements to it.</em></span>
+        </label>
+        <label class="pf-radio">
+          <input type="radio" name="runMode" value="rebuild">
+          <span><strong>Rebuild the quarter from scratch</strong>
+            <em>Uses only the statements above. Anything already filed for this quarter is replaced.</em></span>
+        </label>
+      </fieldset>
+    </div>
+  </div>
 
   <div class="actions">
     <button id="runBtn" class="btn btn-primary" disabled>Analyze</button>
@@ -81,6 +127,36 @@
   </div>
   <div id="reviewLog" class="log" hidden></div>
   <div id="reviewResult" class="result" hidden></div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════ FILED ══ -->
+<section id="tab-filed" class="panel">
+  <div class="card">
+    <h2>What's already filed</h2>
+    <p class="muted">
+      Look at a quarter without touching it. Shows which statements it covers, the category
+      split, and anything still sitting on the Review sheet waiting for a decision from you —
+      plus a link straight to the workbook in Drive.
+    </p>
+    <div class="pf-picker">
+      <label class="field inline">
+        <span>Card</span>
+        <select id="filedCard"></select>
+      </label>
+      <label class="field inline">
+        <span>Fiscal year</span>
+        <select id="filedFy"></select>
+      </label>
+      <label class="field inline">
+        <span>Quarter</span>
+        <select id="filedQuarter"></select>
+      </label>
+      <button id="filedLoadBtn" class="btn btn-primary">Open</button>
+    </div>
+    <p class="muted small" id="filedHint">Connect Google Drive to browse what's filed.</p>
+  </div>
+  <div id="filedLog" class="log" hidden></div>
+  <div id="filedResult" class="result" hidden></div>
 </section>
 
 <!-- ════════════════════════════════════════════════════════ RULES ══ -->

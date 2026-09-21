@@ -108,13 +108,54 @@ This needs Drive connected **before** you hit Analyze — that's when the app go
 for what's already filed. Analyze without connecting and you'll get a workbook containing
 only what you just dropped, which would overwrite the quarter when you file it.
 
+### The preflight panel tells you which of those is about to happen
+
+As soon as you pick files, and before you commit to anything, the app reads the statements,
+works out the card and quarter, checks Drive, and shows you what it found:
+
+- **which statements** it parsed and how many transactions each holds;
+- **which quarter** it's going to file under — as a dropdown you can change, useful when a
+  statement straddles two quarters and the majority rule picks the wrong one, or when
+  you're refiling into a past quarter;
+- **what's already in Drive** for that quarter: the workbook, how many rows it holds, which
+  statements it covers, and how many items are still sitting on the Review sheet waiting
+  for a decision from you;
+- a warning naming any statement you've loaded that's **already filed**, so you know it'll
+  be skipped rather than doubled.
+
+Then you choose what Analyze does:
+
+| Mode | What it does |
+| --- | --- |
+| **Add to this quarter** (default) | Keeps everything already filed and adds the new statements to it. Offered only when there's actually something filed to add to. |
+| **Rebuild the quarter from scratch** | Uses only the statements in front of it. Anything already filed for that quarter is replaced. |
+
+The Analyze button renames itself to match — *Add to Q3 2026* or *Rebuild Q3 2026* — so the
+button you press says what it's going to do. Changing the quarter or the mode never re-reads
+the PDFs; only changing the files does.
+
+If Drive isn't connected the panel says so plainly and append is greyed out, because without
+Drive there's nothing to append to.
+
 ### Filing a new quarter
 
 1. Open the app, click **Connect Google Drive** (first time each session).
 2. Drag your statement PDFs onto the drop zone. **One card at a time** — the app files by
    card, so mixing Amex and CIBC in one run is refused.
-3. Click **Analyze**. You'll see the category summary and the reconciliation result.
-4. If it reconciles, click **File everything to Google Drive**.
+3. Read the preflight panel, and change the quarter or the mode if you need to.
+4. Click **Analyze**. You'll see the category summary and the reconciliation result.
+5. If it reconciles, click **File everything to Google Drive**.
+
+### Looking at a quarter without touching it
+
+The **What's filed** tab answers "what's in Q3, and what's still waiting on me?" without
+loading a single PDF. Pick a card, an audit year and a quarter, and it reads the filed
+workbook and shows the category split, the statements it covers, every row still sitting in
+Review with its note, and links straight to the workbook and the folder in Drive.
+
+Worth knowing: the **Review sheet is not a separate file**. It's a worksheet inside the
+quarterly transactions workbook, at
+`Annual Audit {FY} Sep / Credit Card Statements / {Card} / {Quarter} / {Quarter} {Card} Transactions.xlsx`.
 
 ### Reviewing what it wasn't sure about
 
@@ -134,6 +175,11 @@ rows are kept out of every other category, so your totals are never quietly wron
 
 There's a second block on the Review sheet, *"Categorized, but flagged for a second look"*.
 Those already have a category; put something in COMMENTS only if you want to change it.
+
+**A row you don't answer stays on the Review sheet.** When the next statement merges into
+the quarter, anything still coded `Review` is carried back onto the Review sheet with its
+original note intact — including the town, which on Rogers is recorded nowhere else. An
+unanswered question can't get buried by next month's drop.
 
 > The statement PDFs need to be loaded on tab 1 when you apply a review, because the
 > highlighted files are redrawn from the originals. If you're coming back a week later,
@@ -257,9 +303,19 @@ page, y0, y1}` — `page`/`y0`/`y1` are what the highlighter draws from.
 
 ```bash
 npm install
-node test/run.mjs         # both cards reconcile and match the expected category totals
-node test/roundtrip.mjs   # the review loop, end to end
-node test/artifacts.mjs   # writes real output files to test/out/ for eyeballing
+node test/run.mjs             # both cards reconcile and match the expected category totals
+node test/roundtrip.mjs       # the review loop, end to end
+node test/merge.mjs           # July-then-August lands where both-at-once lands
+node test/artifacts.mjs       # writes real output files to test/out/ for eyeballing
+
+node test/roundtrip-merge.mjs # the workbook round trip — no statements needed
+node test/ui-smoke.mjs        # the page boots and the new controls wire up
 ```
 
-They drive the real app in headless Chromium against the sample statements in `samples/`.
+The first four drive the real app in headless Chromium against the sample statements in
+`samples/`, which are gitignored — they carry your name and account number, so they never
+leave your machine. The last two need nothing but the repo: `roundtrip-merge` builds a
+workbook, reads it back and checks that the things a merge has to preserve actually survive
+(the foreign-currency detail, and a row still sitting in Review with its note), and
+`ui-smoke` boots the page and checks the preflight and What's-filed controls exist and
+behave. Run those two anywhere, including in CI.

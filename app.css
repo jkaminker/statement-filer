@@ -212,3 +212,62 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
   background: var(--surface-2); color: var(--text);
 }
 .field small { display: block; color: var(--muted); font-size: .8rem; margin-top: .3rem; }
+
+/* ─────────────────────────────────────────────────────── preflight ── */
+/* What the app worked out from the PDFs and what Drive already holds,
+   shown before Analyze so nothing about the run is a surprise. */
+.preflight { margin-top: 1rem; }
+.pf-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.pf-head h2 { margin: 0; font-size: 1.05rem; }
+.pill-warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+.pill-bad { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
+
+.pf-facts {
+  display: grid; grid-template-columns: max-content 1fr; gap: .45rem 1rem;
+  margin: .9rem 0 0; font-size: .88rem;
+}
+.pf-facts > div { display: contents; }
+.pf-facts dt { color: var(--muted); font-weight: 600; }
+.pf-facts dd { margin: 0; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.small { font-size: .82rem; }
+
+.mini-select {
+  font: inherit; font-size: .88rem; padding: .25rem .45rem; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+
+.chip-static { display: inline-block; margin: 0 .35rem .35rem 0; }
+
+.pf-filed { margin-top: .9rem; }
+.pf-note {
+  padding: .6rem .8rem; border-radius: 8px; background: var(--accent-soft);
+  font-size: .88rem; margin: 0 0 .5rem;
+}
+.pf-note-warn { background: var(--warn-soft); color: var(--warn); }
+.pf-note a { font-weight: 600; }
+
+.pf-mode { border: 0; padding: 0; margin: 1rem 0 0; }
+.pf-mode legend {
+  padding: 0; font-size: .82rem; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .03em; margin-bottom: .5rem;
+}
+.pf-radio {
+  display: flex; gap: .6rem; align-items: flex-start; padding: .6rem .75rem;
+  border: 1px solid var(--border); border-radius: 8px; margin-bottom: .4rem;
+  cursor: pointer; font-size: .88rem;
+}
+.pf-radio:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.pf-radio.is-disabled { opacity: .5; cursor: not-allowed; }
+.pf-radio input { margin-top: .15rem; }
+.pf-radio strong { display: block; font-weight: 600; }
+.pf-radio em { display: block; font-style: normal; color: var(--muted); font-size: .82rem; }
+
+/* ───────────────────────────────────────────────────── what's filed ── */
+.pf-picker { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; margin-top: 1rem; }
+.field.inline { margin-bottom: 0; }
+.field.inline > span { font-size: .82rem; }
+.field.inline select { min-width: 11rem; }
+tr.is-review td { color: var(--warn); font-weight: 600; }
+.result h3 { font-size: .95rem; margin: 1.2rem 0 .4rem; }

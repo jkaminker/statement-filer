@@ -6,10 +6,12 @@
   "scripts": {
     "test": "node test/run.mjs",
     "test:roundtrip": "node test/roundtrip.mjs",
+    "test:merge": "node test/merge.mjs",
+    "test:offline": "node test/roundtrip-merge.mjs && node test/ui-smoke.mjs",
     "artifacts": "node test/artifacts.mjs"
   },
   "devDependencies": {
-    "exceljs": "4.4.0",
+    "exceljs": "^4.4.0",
     "playwright": "^1.47.0"
   }
 }
