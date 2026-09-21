@@ -114,6 +114,33 @@ export function quarterOf(isoStr) {
   return `Q${Math.floor((m - 1) / 3) + 1} ${y}`;
 }
 
+/**
+ * First and last day of a quarter, as ISO dates.
+ *
+ * A statement period is not a quarter. The July Amex statement runs from
+ * roughly 18 June to 17 July, so it carries a fortnight of June charges that
+ * belong to Q2, not Q3. The quarter's own boundaries are what decide where a
+ * transaction is counted — never the statement it happened to arrive on.
+ */
+export function quarterBounds(label) {
+  const m = String(label).match(/^Q([1-4]) (\d{4})$/);
+  if (!m) return null;
+  const q = Number(m[1]);
+  const y = Number(m[2]);
+  const startMonth = (q - 1) * 3 + 1;
+  const endMonth = startMonth + 2;
+  // day 0 of the following month is the last day of endMonth
+  const lastDay = new Date(Date.UTC(y, endMonth, 0)).getUTCDate();
+  return { from: isoDate(y, startMonth, 1), to: isoDate(y, endMonth, lastDay) };
+}
+
+/** Does this transaction date fall inside the given quarter? */
+export function inQuarter(isoStr, label) {
+  const b = quarterBounds(label);
+  if (!b) return true;          // unparseable label: never silently drop rows
+  return isoStr >= b.from && isoStr <= b.to;
+}
+
 /** Fiscal year that a date falls in, given a fiscal year-end month. */
 export function fiscalYearOf(isoStr, fyEndMonth) {
   const [y, m] = isoStr.split('-').map(Number);
