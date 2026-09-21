@@ -259,3 +259,88 @@ export async function fetchFiled(card, quarter, fiscalYear, rules, onProgress = 
   }
   return { workbookBytes, categoryPdfs, quarterFolderId: quarterFolder };
 }
+
+/**
+ * Walk down to a card's folder for a fiscal year without creating anything.
+ * Returns {cardFolder, trail} or null when the path doesn't exist yet.
+ */
+async function locateCard(card, fiscalYear, rules) {
+  const cfg = rules.cards[card];
+  const rootNames = rules.driveRoot.map((n) => n.replace('{fy}', fiscalYear));
+  let parent = null;
+  for (const n of rootNames) {
+    parent = await findFolder(n, parent);
+    if (!parent) return null;
+  }
+  const cardFolder = await findFolder(cfg.driveFolder, parent);
+  if (!cardFolder) return null;
+  return { cardFolder, path: [...rootNames, cfg.driveFolder].join(' / ') };
+}
+
+/**
+ * Which quarters this card already has folders for, newest first. Used to fill
+ * the quarter picker with the quarters that actually exist rather than a
+ * guessed range.
+ */
+export async function listQuarters(card, fiscalYear, rules) {
+  const found = await locateCard(card, fiscalYear, rules);
+  if (!found) return [];
+  const q = encodeURIComponent(
+    `'${esc(found.cardFolder)}' in parents and mimeType = '${FOLDER_MIME}' and trashed = false`
+  );
+  const res = await api(`/files?q=${q}&fields=files(id,name)&pageSize=100`);
+  return (res.files || [])
+    .map((f) => f.name)
+    .filter((n) => /^Q[1-4] \d{4}$/.test(n))
+    .sort((a, b) => quarterRank(b) - quarterRank(a));
+}
+
+function quarterRank(label) {
+  const m = String(label).match(/^Q([1-4]) (\d{4})$/);
+  return m ? Number(m[2]) * 10 + Number(m[1]) : 0;
+}
+
+/**
+ * A cheap look at what a card+quarter already holds: does the workbook exist,
+ * when was it last touched, which statements does it cover. Deliberately does
+ * NOT download the highlighted PDFs — this runs while you are still deciding
+ * whether to file anything, and there is no reason to pull megabytes for that.
+ *
+ * Returns null when the quarter has nothing filed.
+ */
+export async function probeFiled(card, quarter, fiscalYear, rules) {
+  const cfg = rules.cards[card];
+  const found = await locateCard(card, fiscalYear, rules);
+  if (!found) return null;
+  const quarterFolder = await findFolder(quarter, found.cardFolder);
+  if (!quarterFolder) return null;
+
+  const wbName = cfg.workbookName.replace('{quarter}', quarter);
+  const wbFile = await findFile(wbName, quarterFolder);
+  if (!wbFile) {
+    return {
+      quarterFolderId: quarterFolder,
+      folderUrl: `https://drive.google.com/drive/folders/${quarterFolder}`,
+      path: `${found.path} / ${quarter}`,
+      workbook: null,
+    };
+  }
+  return {
+    quarterFolderId: quarterFolder,
+    folderUrl: `https://drive.google.com/drive/folders/${quarterFolder}`,
+    path: `${found.path} / ${quarter}`,
+    workbook: {
+      id: wbFile.id,
+      name: wbName,
+      modifiedTime: wbFile.modifiedTime || null,
+      url: `https://drive.google.com/file/d/${wbFile.id}/view`,
+    },
+  };
+}
+
+/** The filed workbook's bytes for a card+quarter, or null. */
+export async function fetchWorkbookBytes(card, quarter, fiscalYear, rules) {
+  const probe = await probeFiled(card, quarter, fiscalYear, rules);
+  if (!probe || !probe.workbook) return null;
+  return { ...probe, workbookBytes: await downloadFile(probe.workbook.id) };
+}
