@@ -178,11 +178,17 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   const displacedFiled = filedRows.filter((t) => !inQuarter(t.date, quarter));
   filedRows = carriedIn;
 
-  const outside = dedupeRows([
+  // No de-duplication here, deliberately. The three sources are disjoint by
+  // construction: a filed row sits on the outside sheet OR the data sheet, never
+  // both, and a statement that is already filed has been removed above, so its
+  // rows cannot arrive twice. Collapsing "identical" rows would instead destroy
+  // real money — two Presto fares on one morning, two coffees at one shop, are
+  // the same date, merchant and amount, and both belong in the total.
+  const outside = [
     ...filedOutside.filter((t) => !inQuarter(t.date, quarter)),
     ...displacedFiled,
     ...freshOutside,
-  ]).sort((a, b) => a.date.localeCompare(b.date) || a.desc.localeCompare(b.desc));
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.desc.localeCompare(b.desc));
 
   if (freshOutside.length) {
     onProgress(
@@ -497,25 +503,6 @@ const DEFAULT_STATEMENT_NAMES = {
 /** The sheet that holds transactions belonging to a different quarter. */
 export function outsideSheetName(rules, card) {
   return ((rules.cards[card] || {}).sheets || {}).outside || 'Outside This Quarter';
-}
-
-/**
- * Drop repeats of the same transaction. The out-of-quarter list is rebuilt from
- * several places at once — what the filed workbook already held, rows displaced
- * out of its Data sheet, and rows off the statements in front of us — and the
- * same charge can legitimately reach it by more than one route.
- */
-function dedupeRows(rows) {
-  const seen = new Set();
-  const out = [];
-  for (const t of rows) {
-    const key = `${t.date}|${String(t.desc || '').replace(/\s+/g, ' ').trim().toUpperCase()}`
-      + `|${round2(t.amount)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(t);
-  }
-  return out;
 }
 
 function dominant(list) {
