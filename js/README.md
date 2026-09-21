@@ -1,0 +1,321 @@
+# Statement Filer
+
+Drop your credit card statements into a web page. It reads them, categorizes every
+transaction against your own rules, builds the quarterly Excel workbook, highlights each
+statement line in its category, and files the whole lot into the right folder in your
+Google Drive.
+
+Everything happens **inside your browser tab**. There is no server, no database, and no
+account to sign up for. Your statements are never uploaded anywhere except your own Drive.
+
+---
+
+## What it produces
+
+For a quarter's statements from one card:
+
+```
+Annual Audit 2026 Sep
+└── Credit Card Statements
+    └── Amex
+        ├── Amex Jul 17 2026 Statement.pdf     ← one untouched copy of each
+        ├── Amex Aug 17 2026 Statement.pdf       statement, as the bank issued it
+        └── Q3 2026
+            ├── Q3 2026 Amex Transactions.xlsx     ← Summary / Data / Review sheets
+            ├── Abridged Statements/
+            │   ├── Amex Jul 17 2026 Statement.pdf   ← transaction pages only:
+            │   └── Amex Aug 17 2026 Statement.pdf     no agreement, no interest
+            └── Expenses Summary/                      tables, no marketing
+                ├── Amex Q3 2026 Business Travel.pdf   ← every Business Travel line
+                ├── Amex Q3 2026 Meals.pdf             ←   highlighted in yellow
+                ├── Amex Q3 2026 Professional Fees.pdf
+                └── … one per category
+```
+
+The full statement is filed once per card, not once per quarter, and it's skipped if a
+file of that name is already there — so re-running a quarter never duplicates it.
+
+The workbook's Summary sheet carries a **reconciliation block** that compares the total of
+everything parsed against the statements' own control totals. If those don't match to the
+penny, the app tells you so in red and refuses to file to Drive until it's sorted out.
+
+---
+
+## Setup — three things, once
+
+### 1. Put this in a GitHub repo and turn on Pages
+
+1. On GitHub, create a new repository called `statement-filer`. **Public** — that's what
+   makes Pages free.
+2. Upload every file and folder from this bundle (or `git push` it).
+
+   Two things are deliberately kept out, and `.gitignore` enforces it: your statement PDFs
+   (`samples/`) and your merchant map (`my-rules.json`). Both carry personal data. If you
+   ever see either appear in a commit, stop and remove it.
+3. Go to **Settings → Pages**, set **Source** to *Deploy from a branch*, branch `main`,
+   folder `/ (root)`, and Save.
+4. Wait a minute. Your app is live at
+   `https://<your-github-username>.github.io/statement-filer/`
+
+Bookmark that. It works from any computer or phone.
+
+### 2. Make a Google OAuth Client ID
+
+This is what lets the page write into your Drive. It takes about ten minutes and you only
+do it once.
+
+1. Go to <https://console.cloud.google.com/> and create a project (call it anything).
+2. **APIs & Services → Library** → search for **Google Drive API** → **Enable**.
+3. **APIs & Services → OAuth consent screen** → choose **External** → fill in an app name
+   and your email → Save. Under **Audience → Test users**, add your own Gmail address.
+   (While the app is in "Testing", only listed accounts can sign in. That's fine — it's
+   just you.)
+4. **APIs & Services → Credentials → Create credentials → OAuth client ID**
+   - Application type: **Web application**
+   - Under **Authorized JavaScript origins**, click *Add URI* and enter
+     `https://<your-github-username>.github.io`
+     (just the domain — no `/statement-filer` on the end)
+   - Create, then copy the **Client ID**. It looks like
+     `123456789-abcdef.apps.googleusercontent.com`.
+
+### 3. Paste the Client ID into the app
+
+Open your app, click the **⚙** button top right, paste it in, Save. It's stored in your
+browser only. A Client ID is not a password — it's safe in a public repo — but the app
+doesn't put it there for you, so each browser you use needs it pasted once.
+
+---
+
+## Using it
+
+### A quarter is built up over several drops
+
+You don't have to wait for a quarter to end. Drop each statement as it arrives and
+the app **adds to the quarter already in Drive** rather than replacing it: it finds the
+filed workbook, carries its rows forward with the categories you'd settled, and appends
+the new statement's rows. The reconciliation block grows to list every statement that
+fed the quarter, so the variance check covers all of them.
+
+De-duplication is by **statement**, not by row. If a statement is already named in the
+filed workbook's reconciliation block, it's skipped whole — so re-dropping one you've
+already filed changes nothing rather than doubling it.
+
+The highlighted category PDFs work the same way: the copy in Drive is the starting point
+and the new statement's marked-up pages are appended, so lines highlighted on an earlier
+drop stay highlighted. A category with no new lines is left alone entirely.
+
+This needs Drive connected **before** you hit Analyze — that's when the app goes looking
+for what's already filed. Analyze without connecting and you'll get a workbook containing
+only what you just dropped, which would overwrite the quarter when you file it.
+
+### The preflight panel tells you which of those is about to happen
+
+As soon as you pick files, and before you commit to anything, the app reads the statements,
+works out the card and quarter, checks Drive, and shows you what it found:
+
+- **which statements** it parsed and how many transactions each holds;
+- **which quarter** it's going to file under — as a dropdown you can change, useful when a
+  statement straddles two quarters and the majority rule picks the wrong one, or when
+  you're refiling into a past quarter;
+- **what's already in Drive** for that quarter: the workbook, how many rows it holds, which
+  statements it covers, and how many items are still sitting on the Review sheet waiting
+  for a decision from you;
+- a warning naming any statement you've loaded that's **already filed**, so you know it'll
+  be skipped rather than doubled.
+
+Then you choose what Analyze does:
+
+| Mode | What it does |
+| --- | --- |
+| **Add to this quarter** (default) | Keeps everything already filed and adds the new statements to it. Offered only when there's actually something filed to add to. |
+| **Rebuild the quarter from scratch** | Uses only the statements in front of it. Anything already filed for that quarter is replaced. |
+
+The Analyze button renames itself to match — *Add to Q3 2026* or *Rebuild Q3 2026* — so the
+button you press says what it's going to do. Changing the quarter or the mode never re-reads
+the PDFs; only changing the files does.
+
+If Drive isn't connected the panel says so plainly and append is greyed out, because without
+Drive there's nothing to append to.
+
+### Filing a new quarter
+
+1. Open the app, click **Connect Google Drive** (first time each session).
+2. Drag your statement PDFs onto the drop zone. **One card at a time** — the app files by
+   card, so mixing Amex and CIBC in one run is refused.
+3. Read the preflight panel, and change the quarter or the mode if you need to.
+4. Click **Analyze**. You'll see the category summary and the reconciliation result.
+5. If it reconciles, click **File everything to Google Drive**.
+
+### Looking at a quarter without touching it
+
+The **What's filed** tab answers "what's in Q3, and what's still waiting on me?" without
+loading a single PDF. Pick a card, an audit year and a quarter, and it reads the filed
+workbook and shows the category split, the statements it covers, every row still sitting in
+Review with its note, and links straight to the workbook and the folder in Drive.
+
+Worth knowing: the **Review sheet is not a separate file**. It's a worksheet inside the
+quarterly transactions workbook, at
+`Annual Audit {FY} Sep / Credit Card Statements / {Card} / {Quarter} / {Quarter} {Card} Transactions.xlsx`.
+
+### Reviewing what it wasn't sure about
+
+Anything the rules can't settle is coded `Review` on the Data sheet and listed on the
+**Review** sheet, with a suggested category and a note explaining why it's there. Those
+rows are kept out of every other category, so your totals are never quietly wrong.
+
+1. Open the workbook in Drive (or Excel).
+2. On the **Review** sheet, put the category you want in the **COMMENTS** column (column F).
+   Type the category name exactly, e.g. `Professional Fees`.
+3. Save the file.
+4. Back in the app, go to **2 · Apply my review**, and either load the file from your
+   computer or click **Load the last one from Drive**.
+5. It recodes those rows, rebuilds the summary, redraws every highlighted PDF, and — if the
+   "remember these decisions" box is ticked — writes them into your rules so the same
+   merchants are categorized automatically next quarter.
+
+There's a second block on the Review sheet, *"Categorized, but flagged for a second look"*.
+Those already have a category; put something in COMMENTS only if you want to change it.
+
+**A row you don't answer stays on the Review sheet.** When the next statement merges into
+the quarter, anything still coded `Review` is carried back onto the Review sheet with its
+original note intact — including the town, which on Rogers is recorded nowhere else. An
+unanswered question can't get buried by next month's drop.
+
+> The statement PDFs need to be loaded on tab 1 when you apply a review, because the
+> highlighted files are redrawn from the originals. If you're coming back a week later,
+> just drop the same PDFs in and run Analyze first.
+
+---
+
+## Your rules
+
+### Your merchant list stays off GitHub
+
+This repo is public — that's what makes GitHub Pages free — so the `rules.json` in it ships
+with an **empty merchant map**. Merchant names are personal data; a list of where you shop
+does not belong in a public repo.
+
+The real map lives in **`my-rules.json`**, which you keep on your own machine. Open the app,
+go to the **Rules** tab, click **Import a rules file…**, and pick it. It's stored in that
+browser from then on and is never uploaded anywhere. Do it once per browser you use.
+
+If you skip the import, nothing breaks — the app just puts more rows on the Review sheet
+at first and learns your answers as you go.
+
+### What's in the rules
+
+`rules.json` is the brain. The **Rules** tab shows it and lets you edit it. It holds:
+
+| Section | What it does |
+|---|---|
+| `merchants` | Exact statement description → category, per card. Seeded from every workbook you'd already built, with your most recent decision winning where past quarters disagreed. |
+| `alwaysReview` | Merchants to put in front of you. A plain entry only fires if you haven't already ruled on that merchant; add `"force": true` to be asked every quarter. |
+| `spendCategoryDefaults` | For merchants seen for the first time, falls back to the bank's own spend category (CIBC prints one on every line). |
+| `gtaRule` | Meals outside the GTA become Business Travel. Two lists of place names decide which is which — add a city to whichever list it belongs in. |
+| `largeAmountReview` | A charge over this amount from a merchant never seen before goes to Review even if a fallback rule would have caught it. |
+| `cards` | Per-card file naming, folder names and sheet names, so each card's output matches what's already in your audit folder. `gtaToCategory` lets a card name its own out-of-GTA bucket — Rogers uses `Travel`, Amex and CIBC use `Business Travel`. |
+
+When a merchant is new to one card but you've already ruled on it on another, the Review
+sheet says so and pre-fills the SUGGESTED CATEGORY — but it still waits for you. It is never
+applied across cards on its own, and only offered when every other card agrees.
+
+Edits made in the Rules tab live in that browser. Click **Download rules.json** and commit
+it to your repo to make them permanent and available everywhere.
+
+### Anything it can't place goes to Review
+
+The app never guesses silently. If a merchant isn't in the rules and the bank's spend
+category doesn't settle it, the row goes to Review. If a city isn't in either GTA list, the
+meal is left where it is and flagged. That's deliberate — a wrong number that looks
+confident is worse than a question.
+
+---
+
+## What's supported
+
+| Card | Status |
+|---|---|
+| Amex (Aeroplan Reserve) | Working — verified against your Q3 2026 statements |
+| CIBC (Costco World Mastercard) | Working — verified against your Q3 2026 statements |
+| Rogers (Red World Elite Mastercard) | Working — verified against your Jul and Aug 2026 statements |
+| Canadian Tire, CI Financial, TD Bank | Not yet — send a sample statement and it's a small addition |
+
+Each parser was checked by running the app against your real statements and confirming it
+ties to the statement's own control totals to the cent. For Amex and CIBC the category split
+also matches the workbooks you'd already signed off, every category, exactly.
+
+Rogers reconciles on **both sides**, which is stronger than the other two allow: the
+statement prints *New purchases & debits* and *Payments & credits* separately, so the
+positive rows have to tie to the first and the negative rows to the second. Payments of the
+card balance are dropped (they aren't an expense); refunds and cash-back rebates are kept as
+negative rows so they reduce whichever category they belong to, and the control total is
+adjusted by the payments removed so a missed row still shows up as a variance.
+
+---
+
+## Privacy and access
+
+The app asks Google for permission to see and manage your Drive files. It needs that broad
+scope for one reason: to **find your existing** `Annual Audit … Sep` folder. Google's
+narrower app-only scope can't see folders it didn't create itself, which would mean filing
+everything into a fresh folder instead of yours.
+
+It only ever writes inside `Annual Audit … Sep / Credit Card Statements /`. The access token
+lives in the page's memory and is gone when you close the tab.
+
+---
+
+## For developers
+
+No build step. It's plain ES modules; the three libraries it uses are vendored in
+`vendor/` so the app has no CDN dependency and works offline.
+
+```
+index.html          the whole UI
+app.css
+rules.json          your editable rules
+js/
+  main.js           UI wiring
+  pipeline.js       run() and applyReview() — the orchestration
+  rules.js          categorization engine
+  workbook.js       ExcelJS build + read-back
+  highlight.js      pdf-lib category PDFs
+  drive.js          Google Identity Services + Drive REST
+  parsers/
+    base.js         pdf.js word/row extraction shared by all parsers
+    amex.js
+    cibc.js
+    rogers.js
+    registry.js     detection + lookup
+vendor/             pdf.js, ExcelJS, pdf-lib
+test/               Playwright harness (npm install, then node test/run.mjs)
+```
+
+### Adding a card
+
+Write `js/parsers/<card>.js` exporting `id`, `label`, `detect(pages)`, `parse(pages)` and
+optionally `highlightSpan(...)`; add it to `registry.js`; add a `cards.<id>` block to
+`rules.json`. `parse` returns `{card, statementLabel, statementDate, controlTotal,
+transactions[], transactionPages[]}` where each transaction carries `{date, desc, amount,
+page, y0, y1}` — `page`/`y0`/`y1` are what the highlighter draws from.
+
+### Tests
+
+```bash
+npm install
+node test/run.mjs             # both cards reconcile and match the expected category totals
+node test/roundtrip.mjs       # the review loop, end to end
+node test/merge.mjs           # July-then-August lands where both-at-once lands
+node test/artifacts.mjs       # writes real output files to test/out/ for eyeballing
+
+node test/roundtrip-merge.mjs # the workbook round trip — no statements needed
+node test/ui-smoke.mjs        # the page boots and the new controls wire up
+```
+
+The first four drive the real app in headless Chromium against the sample statements in
+`samples/`, which are gitignored — they carry your name and account number, so they never
+leave your machine. The last two need nothing but the repo: `roundtrip-merge` builds a
+workbook, reads it back and checks that the things a merge has to preserve actually survive
+(the foreign-currency detail, and a row still sitting in Review with its note), and
+`ui-smoke` boots the page and checks the preflight and What's-filed controls exist and
+behave. Run those two anywhere, including in CI.
