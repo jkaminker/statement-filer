@@ -513,9 +513,16 @@ function renderResult(res, host, isReview) {
       + `in ${escapeHtml(res.quarter)}.${outsideBit} `
       + 'Together these match the statement totals exactly.</div>';
   } else if (res.controlTotal) {
+    // Show every term of the sum. The quarter total alone does not equal the
+    // statement total whenever rows fall outside the quarter, so printing just
+    // those two makes the difference look like arithmetic that doesn't work.
     banner.className = 'banner banner-bad';
+    const sum = res.outside && res.outside.length
+      ? `${money(res.parsedTotal)} in ${escapeHtml(res.quarter)} plus `
+        + `${money(res.outsideTotal)} outside it = ${money(res.parsedTotal + res.outsideTotal)}`
+      : `${money(res.parsedTotal)}`;
     banner.innerHTML = `<span>!</span><div><strong>Does not reconcile.</strong> `
-      + `Parsed ${money(res.parsedTotal)} against a statement total of ${money(res.controlTotal)} — `
+      + `${sum}, against a statement total of ${money(res.controlTotal)} — `
       + `a difference of ${money(res.variance)}. Don't file this until we work out why.</div>`;
   } else {
     banner.className = 'banner banner-warn';
