@@ -1,22 +1,27 @@
 // Orchestrates a run: statements in, categorized workbook + highlighted PDFs out.
 
 import { readPages, quarterOf, fiscalYearOf } from './parsers/base.js';
-import { detectCard, parserFor } from './parsers/registry.js';
+import { detectCard } from './parsers/registry.js';
 import { categorize, summarize, applyGtaRule, canonicalCategory } from './rules.js';
 import { buildWorkbook, readFiledWorkbook } from './workbook.js';
 import { buildCategoryPdfs, buildAbridgedStatements } from './highlight.js';
 
 /**
- * @param {File[]} files          statement PDFs the user dropped
+ * Read the statements and work out where they belong — nothing else. This is
+ * what the Process tab calls the moment you pick files, so it can tell you which
+ * card and quarter it sees, and look up what Drive already holds, BEFORE you
+ * commit to a run. The parsed result is handed back so `run` can reuse it rather
+ * than reading every PDF a second time.
+ *
+ * @param {File[]} files
  * @param {object} rules
- * @param {object} libs           {pdfjsLib, ExcelJS, PDFLib}
+ * @param {object} libs           {pdfjsLib}
  * @param {function} onProgress   (message) => void
  */
-export async function run(files, rules, libs, onProgress = () => {}, opts = {}) {
-  const { pdfjsLib, ExcelJS, PDFLib } = libs;
+export async function inspect(files, rules, libs, onProgress = () => {}) {
+  const { pdfjsLib } = libs;
   const sources = [];
 
-  // ------------------------------------------------------------- 1. parse
   for (const file of files) {
     onProgress(`Reading ${file.name}…`);
     const bytes = new Uint8Array(await file.arrayBuffer());
@@ -41,7 +46,6 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
     );
   }
 
-  // ------------------------------------------- 2. group by card and quarter
   const cards = [...new Set(sources.map((s) => s.parser.id))];
   if (cards.length > 1) {
     throw new Error(
@@ -52,15 +56,56 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   }
   const card = cards[0];
 
-  const all = [];
-  for (const s of sources) {
-    for (const t of s.parsed.transactions) all.push({ ...t, source: s.name });
-  }
-  all.sort((a, b) => a.date.localeCompare(b.date) || a.desc.localeCompare(b.desc));
+  const dates = [];
+  for (const s of sources) for (const t of s.parsed.transactions) dates.push(t.date);
+  dates.sort();
 
-  const quarters = [...new Set(all.map((t) => quarterOf(t.date)))];
-  const quarter = dominant(all.map((t) => quarterOf(t.date)));
-  const fiscalYear = fiscalYearOf(all[all.length - 1].date, rules.fiscalYearEndMonth);
+  const quarters = [...new Set(dates.map(quarterOf))];
+  const quarter = dominant(dates.map(quarterOf));
+  const fiscalYear = fiscalYearOf(dates[dates.length - 1], rules.fiscalYearEndMonth);
+
+  return {
+    card,
+    cardLabel: rules.cards[card].label,
+    quarter,
+    quarters,
+    fiscalYear,
+    sources,
+    rowCount: dates.length,
+    dateRange: { from: dates[0], to: dates[dates.length - 1] },
+    statements: sources.map((s) => ({
+      file: s.name,
+      label: s.parsed.statementLabel,
+      count: s.parsed.transactions.length,
+      controlTotal: s.parsed.controlTotal,
+    })),
+  };
+}
+
+/**
+ * @param {File[]} files          statement PDFs the user dropped
+ * @param {object} rules
+ * @param {object} libs           {pdfjsLib, ExcelJS, PDFLib}
+ * @param {function} onProgress   (message) => void
+ * @param {object} opts
+ *   fetchFiled   async (card, quarter, fy) => {workbookBytes, categoryPdfs} | null
+ *   inspected    a prior `inspect` result, to skip re-reading the PDFs
+ *   quarter      force the target quarter instead of inferring it from the dates
+ *   mode         'append' (default) | 'rebuild' — 'rebuild' ignores what's filed
+ */
+export async function run(files, rules, libs, onProgress = () => {}, opts = {}) {
+  const { ExcelJS, PDFLib } = libs;
+
+  // ------------------------------------------------------------- 1. parse
+  const seen = opts.inspected || await inspect(files, rules, libs, onProgress);
+  const sources = seen.sources.slice();
+  const card = seen.card;
+
+  // ------------------------------------------- 2. group by card and quarter
+  const quarters = seen.quarters;
+  const quarter = opts.quarter || seen.quarter;
+  const fiscalYear = seen.fiscalYear;
+  const mode = opts.mode === 'rebuild' ? 'rebuild' : 'append';
 
   // ------------------------------------------- 2b. merge with what's filed
   // A quarter is built up over several drops. If this card and quarter already
@@ -68,11 +113,14 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   // ADDED to the quarter rather than replacing it. De-duplication is by
   // statement, not by row: a statement already named in the filed
   // reconciliation block is skipped whole, which makes re-dropping one a no-op.
+  //
+  // 'rebuild' mode skips all of this: the quarter is built from the statements
+  // in front of it and whatever is in Drive gets overwritten.
   let filedRows = [];
   let filedStatements = [];
   let basePdfs = null;
   const skipped = [];
-  if (typeof opts.fetchFiled === 'function') {
+  if (mode === 'append' && typeof opts.fetchFiled === 'function') {
     try {
       const filed = await opts.fetchFiled(card, quarter, fiscalYear);
       if (filed && filed.workbookBytes) {
@@ -104,10 +152,14 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   // --------------------------------------------------------- 3. categorize
   // only the new rows: anything already filed carries the category you settled
   onProgress('Categorizing…');
-  const { review, flags } = categorize(fresh, card, rules);
+  const reviewCat = rules.reviewCategory || 'Review';
+  const { review: freshReview, flags } = categorize(fresh, card, rules);
   const merged = [...filedRows, ...fresh].sort(
     (a, b) => a.date.localeCompare(b.date) || a.desc.localeCompare(b.desc)
   );
+
+  const carriedReview = carryForwardReview(filedRows, rules);
+  const review = [...carriedReview, ...freshReview];
 
   // --------------------------------------------------- 4. reconcile & check
   const parsedTotal = round2(merged.reduce((s, t) => s + t.amount, 0));
@@ -126,10 +178,22 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   // --------------------------------------------------------- 5. build files
   onProgress('Building the workbook…');
   const notes = [];
-  if (quarters.length > 1) {
+  const overrode = opts.quarter && opts.quarter !== seen.quarter;
+  if (overrode) {
+    notes.push(
+      `Filed under ${quarter} by hand. Left to itself the app would have chosen `
+      + `${seen.quarter}, where most of these transactions fall.`
+    );
+  } else if (quarters.length > 1) {
     notes.push(
       `These statements span ${quarters.join(' and ')}; filed under ${quarter}, `
       + 'which holds the majority of the transactions.'
+    );
+  }
+  if (mode === 'rebuild') {
+    notes.push(
+      `Built from these statements alone — anything previously filed under ${quarter} `
+      + 'was replaced, not added to.'
     );
   }
   if (filedRows.length) {
@@ -142,6 +206,12 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   }
   if (skipped.length) {
     notes.push(`${skipped.join(' & ')} ${skipped.length === 1 ? 'was' : 'were'} already filed and ${skipped.length === 1 ? 'was' : 'were'} not added again.`);
+  }
+  if (carriedReview.length) {
+    notes.push(
+      `${carriedReview.length} item${carriedReview.length === 1 ? '' : 's'} from an earlier `
+      + 'statement in this quarter are still awaiting a decision and remain on the Review sheet.'
+    );
   }
   const wb = await buildWorkbook(ExcelJS, {
     card, quarter, transactions: merged, review, flags, statements, rules, notes,
@@ -156,10 +226,19 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
     card,
     cardLabel: rules.cards[card].label,
     quarter,
+    quarterAuto: seen.quarter,
+    quarterOverridden: !!overrode,
+    mode,
     fiscalYear,
     sources,
     transactions: merged,
-    merged: { carried: filedRows.length, added: fresh.length, skipped },
+    merged: {
+      carried: filedRows.length,
+      added: fresh.length,
+      skipped,
+      carriedReview: carriedReview.length,
+      carriedFx: filedRows.filter((t) => t.fx).length,
+    },
     review,
     flags,
     summary: summarize(merged),
@@ -242,7 +321,13 @@ export async function applyReview(previous, decisions, rules, libs, onProgress =
     card: previous.card,
     quarter: previous.quarter,
     transactions: previous.transactions,
-    review: stillReview.map((t) => ({ ...t, suggested: '', note: 'Still awaiting a decision.' })),
+    review: stillReview.map((t) => ({
+      ...t,
+      suggested: t.suggested || '',
+      // keep whatever context the row already carried — on Rogers the note is
+      // the only record of the town, and losing it makes the row unanswerable
+      note: t.note ? `${t.note} Still awaiting a decision.` : 'Still awaiting a decision.',
+    })),
     flags: gta.flags,
     statements: previous.statements,
     rules,
@@ -268,6 +353,29 @@ export async function applyReview(previous, decisions, rules, libs, onProgress =
     },
     categoryPdfs,
   };
+}
+
+/**
+ * A filed row still sitting in Review is a question you haven't answered yet, so
+ * it has to go back onto the Review sheet of the rebuilt workbook.
+ *
+ * Without this, adding next month's statement quietly buries it: the row stays
+ * coded Review on the data sheet and keeps dragging the summary's Review bucket
+ * up, but nothing on the Review sheet asks you about it any more, so it can sit
+ * there for the rest of the quarter. Its note and suggestion are read back out
+ * of the filed workbook rather than regenerated — on Rogers that note is the
+ * only record of which town the charge happened in, and without it the row
+ * cannot be answered.
+ */
+export function carryForwardReview(filedRows, rules) {
+  const reviewCat = rules.reviewCategory || 'Review';
+  return filedRows
+    .filter((t) => t.category === reviewCat)
+    .map((t) => ({
+      ...t,
+      suggested: t.suggested || '',
+      note: t.note || 'Carried forward from an earlier statement in this quarter.',
+    }));
 }
 
 function dominant(list) {
