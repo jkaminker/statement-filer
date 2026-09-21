@@ -1,6 +1,6 @@
 // Orchestrates a run: statements in, categorized workbook + highlighted PDFs out.
 
-import { readPages, quarterOf, fiscalYearOf } from './parsers/base.js';
+import { readPages, quarterOf, fiscalYearOf, quarterBounds, inQuarter } from './parsers/base.js';
 import { detectCard } from './parsers/registry.js';
 import { categorize, summarize, applyGtaRule, canonicalCategory } from './rules.js';
 import { buildWorkbook, readFiledWorkbook } from './workbook.js';
@@ -64,11 +64,20 @@ export async function inspect(files, rules, libs, onProgress = () => {}) {
   const quarter = dominant(dates.map(quarterOf));
   const fiscalYear = fiscalYearOf(dates[dates.length - 1], rules.fiscalYearEndMonth);
 
+  // how the rows fall across quarters, so the Process tab can warn you that a
+  // statement straddles a boundary before you commit to anything
+  const byQuarter = {};
+  for (const d of dates) {
+    const q = quarterOf(d);
+    byQuarter[q] = (byQuarter[q] || 0) + 1;
+  }
+
   return {
     card,
     cardLabel: rules.cards[card].label,
     quarter,
     quarters,
+    byQuarter,
     fiscalYear,
     sources,
     rowCount: dates.length,
@@ -117,6 +126,7 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   // 'rebuild' mode skips all of this: the quarter is built from the statements
   // in front of it and whatever is in Drive gets overwritten.
   let filedRows = [];
+  let filedOutside = [];
   let filedStatements = [];
   let basePdfs = null;
   const skipped = [];
@@ -126,6 +136,7 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
       if (filed && filed.workbookBytes) {
         const prior = await readFiledWorkbook(ExcelJS, filed.workbookBytes, card, rules);
         filedRows = prior.rows;
+        filedOutside = prior.outside || [];
         filedStatements = prior.statements;
         basePdfs = filed.categoryPdfs || null;
         const already = new Set(filedStatements.map((x) => x.label));
@@ -144,9 +155,46 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
     }
   }
 
-  const fresh = [];
+  const parsedFresh = [];
   for (const s of sources) {
-    for (const t of s.parsed.transactions) fresh.push({ ...t, source: s.name });
+    for (const t of s.parsed.transactions) parsedFresh.push({ ...t, source: s.name });
+  }
+
+  // ------------------------------------------- 2c. scope to the quarter
+  // A statement period is not a quarter. The July statement runs from roughly
+  // 18 June to 17 July, so it carries June charges that belong to Q2. Those are
+  // set aside here: they stay in the workbook, on their own sheet and in the
+  // reconciliation, but they are kept out of the Data sheet and therefore out
+  // of every category total. The quarter's own boundaries decide this, never
+  // the statement a charge happened to arrive on.
+  //
+  // Filed rows are re-checked too, not just new ones. A workbook built before
+  // this rule existed has last quarter's spillover sitting in its Data sheet,
+  // and appending the next statement quietly repairs it.
+  const bounds = quarterBounds(quarter);
+  const fresh = parsedFresh.filter((t) => inQuarter(t.date, quarter));
+  const freshOutside = parsedFresh.filter((t) => !inQuarter(t.date, quarter));
+  const carriedIn = filedRows.filter((t) => inQuarter(t.date, quarter));
+  const displacedFiled = filedRows.filter((t) => !inQuarter(t.date, quarter));
+  filedRows = carriedIn;
+
+  const outside = dedupeRows([
+    ...filedOutside.filter((t) => !inQuarter(t.date, quarter)),
+    ...displacedFiled,
+    ...freshOutside,
+  ]).sort((a, b) => a.date.localeCompare(b.date) || a.desc.localeCompare(b.desc));
+
+  if (freshOutside.length) {
+    onProgress(
+      `${freshOutside.length} transaction${freshOutside.length === 1 ? '' : 's'} on these `
+      + `statements fall outside ${quarter} — listed separately, not counted in the summary.`
+    );
+  }
+  if (displacedFiled.length) {
+    onProgress(
+      `${displacedFiled.length} row${displacedFiled.length === 1 ? '' : 's'} already filed under `
+      + `${quarter} belong to another quarter — moved off the summary.`
+    );
   }
 
   // --------------------------------------------------------- 3. categorize
@@ -154,6 +202,7 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   onProgress('Categorizing…');
   const reviewCat = rules.reviewCategory || 'Review';
   const { review: freshReview, flags } = categorize(fresh, card, rules);
+  categorize(freshOutside, card, rules);   // so the outside sheet shows a category too
   const merged = [...filedRows, ...fresh].sort(
     (a, b) => a.date.localeCompare(b.date) || a.desc.localeCompare(b.desc)
   );
@@ -162,7 +211,13 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   const review = [...carriedReview, ...freshReview];
 
   // --------------------------------------------------- 4. reconcile & check
+  // The summary covers the quarter, but the statements cover their own periods,
+  // so the two only tie once the out-of-quarter rows are added back. Keeping
+  // that identity explicit is what lets the summary be scoped to the quarter
+  // without the reconciliation check losing its meaning: it still proves every
+  // line on every statement was parsed and accounted for somewhere.
   const parsedTotal = round2(merged.reduce((s, t) => s + t.amount, 0));
+  const outsideTotal = round2(outside.reduce((s, t) => s + t.amount, 0));
   const statements = [
     ...filedStatements,
     ...sources.map((s) => ({
@@ -173,7 +228,7 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   const controlTotal = round2(
     statements.reduce((s, x) => s + (x.controlTotal || 0), 0)
   );
-  const variance = round2(parsedTotal - controlTotal);
+  const variance = round2(parsedTotal + outsideTotal - controlTotal);
 
   // --------------------------------------------------------- 5. build files
   onProgress('Building the workbook…');
@@ -213,14 +268,33 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
       + 'statement in this quarter are still awaiting a decision and remain on the Review sheet.'
     );
   }
+  if (outside.length) {
+    const qs = [...new Set(outside.map((t) => quarterOf(t.date)))].sort();
+    notes.push(
+      `${outside.length} transaction${outside.length === 1 ? '' : 's'} totalling `
+      + `$${outsideTotal.toFixed(2)} fall outside ${quarter} (${qs.join(', ')}) and are `
+      + 'excluded from every category total; they are listed on the "'
+      + outsideSheetName(rules, card) + '" sheet.'
+    );
+  }
   const wb = await buildWorkbook(ExcelJS, {
     card, quarter, transactions: merged, review, flags, statements, rules, notes,
+    outside, bounds,
   });
   const workbookBytes = new Uint8Array(await wb.xlsx.writeBuffer());
 
+  // the filed copy is renamed to the convention the card's folder already uses;
+  // the file the bank gave you keeps its own name on disk
+  for (const s of sources) {
+    s.filedName = statementFileName(rules, card, s.parsed) || s.name;
+  }
+
   onProgress('Highlighting the statements…');
   const categoryPdfs = await buildCategoryPdfs(PDFLib, sources, fresh, rules, card, quarter, basePdfs);
-  const abridged = await buildAbridgedStatements(PDFLib, sources);
+  const abridged = (await buildAbridgedStatements(PDFLib, sources)).map((a, i) => ({
+    ...a,
+    name: sources[i] ? sources[i].filedName : a.name,
+  }));
 
   return {
     card,
@@ -243,6 +317,9 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
     flags,
     summary: summarize(merged),
     parsedTotal,
+    outside,
+    outsideTotal,
+    bounds,
     controlTotal,
     variance,
     statements,
@@ -320,6 +397,10 @@ export async function applyReview(previous, decisions, rules, libs, onProgress =
   const wb = await buildWorkbook(ExcelJS, {
     card: previous.card,
     quarter: previous.quarter,
+    // the out-of-quarter list is untouched by a review pass, but it has to be
+    // handed back in or the rebuilt workbook would lose the sheet entirely
+    outside: previous.outside || [],
+    bounds: previous.bounds,
     transactions: previous.transactions,
     review: stillReview.map((t) => ({
       ...t,
@@ -376,6 +457,65 @@ export function carryForwardReview(filedRows, rules) {
       suggested: t.suggested || '',
       note: t.note || 'Carried forward from an earlier statement in this quarter.',
     }));
+}
+
+const MON = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * What a statement PDF should be called once it's filed.
+ *
+ * Banks name their downloads unhelpfully and inconsistently, so the file is
+ * renamed to the convention each card's folder already uses. The template lives
+ * in rules.json per card; the defaults here match what's in the audit folder
+ * today, so an existing rules file without the key still gets the right name.
+ *
+ *   {card}  the card's label        Amex
+ *   {mon}   three-letter month      Jul
+ *   {day}   day of month, no pad    17
+ *   {year}  four-digit year         2026
+ */
+export function statementFileName(rules, card, parsed) {
+  const cfg = rules.cards[card] || {};
+  const tpl = cfg.statementFileName || DEFAULT_STATEMENT_NAMES[card]
+    || '{card} {mon} {day} {year} Statement.pdf';
+  const iso = parsed.statementDate;
+  if (!iso) return null;
+  const [y, m, d] = iso.split('-').map(Number);
+  return tpl
+    .replace('{card}', cfg.label || card)
+    .replace('{mon}', MON[m])
+    .replace('{day}', String(d))
+    .replace('{year}', String(y));
+}
+
+const DEFAULT_STATEMENT_NAMES = {
+  amex: '{card} {mon} {day} {year} Statement.pdf',
+  cibc: '{card} Statement - {mon} {day} {year}.pdf',
+  rogers: '{card} {mon} {day} {year} Statement.pdf',
+};
+
+/** The sheet that holds transactions belonging to a different quarter. */
+export function outsideSheetName(rules, card) {
+  return ((rules.cards[card] || {}).sheets || {}).outside || 'Outside This Quarter';
+}
+
+/**
+ * Drop repeats of the same transaction. The out-of-quarter list is rebuilt from
+ * several places at once — what the filed workbook already held, rows displaced
+ * out of its Data sheet, and rows off the statements in front of us — and the
+ * same charge can legitimately reach it by more than one route.
+ */
+function dedupeRows(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const t of rows) {
+    const key = `${t.date}|${String(t.desc || '').replace(/\s+/g, ' ').trim().toUpperCase()}`
+      + `|${round2(t.amount)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
 }
 
 function dominant(list) {
