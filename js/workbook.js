@@ -289,11 +289,15 @@ export async function readReviewedWorkbook(ExcelJS, arrayBuffer, card, rules) {
  * Read a workbook this app filed in an earlier run, so a later drop can merge
  * into it instead of replacing it.
  *
- * Two things come back. The Data rows carry categories you have already settled
+ * Four things come back. The Data rows carry categories you have already settled
  * — they are taken as final and never re-categorized. The reconciliation block
  * tells us which statements the quarter already covers, and that list is what
  * makes re-dropping a statement harmless: a statement already named there is
- * skipped whole rather than having its rows matched one by one.
+ * skipped whole rather than having its rows matched one by one. The FX sheet is
+ * read back and reattached to its rows, and the Review sheet's notes are
+ * recovered, because neither survives a round trip through the Data sheet alone:
+ * a row that is still awaiting your decision would otherwise come back stripped
+ * of the note that tells you what you are deciding about.
  */
 export async function readFiledWorkbook(ExcelJS, arrayBuffer, card, rules) {
   const cfg = rules.cards[card];
@@ -305,20 +309,74 @@ export async function readFiledWorkbook(ExcelJS, arrayBuffer, card, rules) {
   if (!data) throw new Error(`That workbook has no "${cfg.sheets.data}" sheet.`);
 
   const isAmex = card === 'amex';
+
+  // ------------------------------------------- foreign-currency detail, first
+  // Column D holds "123.45 USD" and column E the rate. Keyed by date+desc+amount
+  // so it can be reattached to the Data row it belongs to.
+  const fxByKey = new Map();
+  const fxSheet = cfg.sheets.fx ? wb.getWorksheet(cfg.sheets.fx) : null;
+  if (fxSheet) {
+    fxSheet.eachRow((row, n) => {
+      if (n < 4) return;
+      const d = row.getCell(1).value;
+      if (!(d instanceof Date)) return;
+      const amount = cellNumber(row.getCell(3).value);
+      const spend = String(cellText(row.getCell(4).value) || '').trim();
+      const rate = cellNumber(row.getCell(5).value);
+      const m = spend.match(/^(-?[\d,]+(?:\.\d+)?)\s*([A-Za-z]{3})$/);
+      if (!m || !Number.isFinite(amount)) return;
+      fxByKey.set(
+        rowKey(isoOf(d), cellText(row.getCell(2).value), amount),
+        { amount: Number(m[1].replace(/,/g, '')), currency: m[2].toUpperCase(), rate }
+      );
+    });
+  }
+
+  // --------------------------------------------- the Review sheet's own notes
+  // Only the top block (dated rows). The flagged block below it is keyed by
+  // merchant, not by row, and is rebuilt from scratch on every run anyway.
+  const reviewByKey = new Map();
+  const revSheet = wb.getWorksheet(cfg.sheets.review);
+  if (revSheet) {
+    revSheet.eachRow((row, n) => {
+      if (n < 4) return;
+      const d = row.getCell(1).value;
+      if (!(d instanceof Date)) return;
+      const amount = cellNumber(row.getCell(4).value);
+      if (!Number.isFinite(amount)) return;
+      reviewByKey.set(rowKey(isoOf(d), cellText(row.getCell(2).value), amount), {
+        suggested: String(cellText(row.getCell(3).value) || '').trim(),
+        note: String(cellText(row.getCell(5).value) || '').trim(),
+      });
+    });
+  }
+
   const rows = [];
   data.eachRow((row, n) => {
     if (n === 1) return;
     const d = row.getCell(1).value;
     if (!(d instanceof Date)) return;
-    const amount = Number(row.getCell(isAmex ? 3 : 4).value);
+    const amount = cellNumber(row.getCell(isAmex ? 3 : 4).value);
     if (!Number.isFinite(amount)) return;
-    rows.push({
-      date: d.toISOString().slice(0, 10),
-      desc: String(row.getCell(2).value || ''),
-      category: String(row.getCell(isAmex ? 4 : 3).value || ''),
-      amount: Math.round(amount * 100) / 100,
+    const date = isoOf(d);
+    const desc = String(cellText(row.getCell(2).value) || '');
+    const rounded = Math.round(amount * 100) / 100;
+    const key = rowKey(date, desc, rounded);
+    const t = {
+      date,
+      desc,
+      category: String(cellText(row.getCell(isAmex ? 4 : 3).value) || ''),
+      amount: rounded,
       filed: true,
-    });
+    };
+    const fx = fxByKey.get(key);
+    if (fx) t.fx = fx;
+    const rev = reviewByKey.get(key);
+    if (rev) {
+      if (rev.suggested) t.suggested = rev.suggested;
+      if (rev.note) t.note = rev.note;
+    }
+    rows.push(t);
   });
 
   // pull the per-statement control totals back out of the reconciliation block
@@ -341,4 +399,41 @@ export async function readFiledWorkbook(ExcelJS, arrayBuffer, card, rules) {
 
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ─────────────────────────────────────────────────────────── cell helpers ──
+// A cell that looks like a plain number or string can arrive as a formula
+// result or as rich text, depending on how Excel last saved the file. These
+// three flatten all of that down to what the row actually says.
+
+function cellText(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'object') {
+    if (Array.isArray(v.richText)) return v.richText.map((r) => r.text).join('');
+    if ('result' in v) return String(v.result ?? '');
+    if ('text' in v) return String(v.text ?? '');
+  }
+  return String(v);
+}
+
+function cellNumber(v) {
+  if (typeof v === 'number') return v;
+  if (v && typeof v === 'object' && 'result' in v) return Number(v.result);
+  const n = Number(String(cellText(v)).replace(/[$,\s]/g, ''));
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function isoOf(d) {
+  // matches how buildWorkbook wrote the date, so a value survives the round trip
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * The identity of a transaction across sheets and across runs: the same date,
+ * merchant and amount. Whitespace is normalized because Excel and the parsers
+ * disagree about non-breaking spaces.
+ */
+export function rowKey(date, desc, amount) {
+  const d = String(desc || '').replace(/ /g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
+  return `${date}|${d}|${Math.round(Number(amount) * 100) / 100}`;
 }
