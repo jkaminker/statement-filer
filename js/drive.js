@@ -185,14 +185,19 @@ export async function fileRun(result, rules, onProgress = () => {}) {
   ));
 
   // one untouched copy of each statement, kept in the card folder alongside the
-  // other quarters — skipped if it's already there, so re-running is harmless
+  // other quarters — skipped if it's already there, so re-running is harmless.
+  // It is filed under the card's naming convention rather than whatever the
+  // bank called the download.
   for (const s of result.sources) {
-    if (await findFile(s.name, cardFolder)) {
-      onProgress(`${s.name} is already filed — leaving it alone.`);
+    const filedName = s.filedName || s.name;
+    if (await findFile(filedName, cardFolder)) {
+      onProgress(`${filedName} is already filed — leaving it alone.`);
       continue;
     }
-    onProgress(`Uploading ${s.name}…`);
-    uploaded.push(await uploadFile(s.name, 'application/pdf', s.bytes, cardFolder));
+    onProgress(filedName === s.name
+      ? `Uploading ${filedName}…`
+      : `Uploading ${s.name} as ${filedName}…`);
+    uploaded.push(await uploadFile(filedName, 'application/pdf', s.bytes, cardFolder));
   }
 
   // the quarter keeps the abridged copy — transaction pages only
