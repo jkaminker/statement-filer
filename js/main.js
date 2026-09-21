@@ -179,6 +179,7 @@ let rebuildChosenByUser = false;
 function initPreflight() {
   $('pfQuarter').addEventListener('change', () => {
     // only the Drive side depends on the quarter; the PDFs are already read
+    renderQuarterSplit();
     renderPreflightFiled();
   });
   document.querySelectorAll('input[name="runMode"]').forEach((r) => {
@@ -280,6 +281,34 @@ async function fillQuarterOptions() {
   $('pfQuarterNote').textContent = inspected.quarters.length > 1
     ? `these statements span ${inspected.quarters.join(' and ')}`
     : '';
+  renderQuarterSplit();
+}
+
+/**
+ * Say plainly, before Analyze runs, how many rows fall outside the target
+ * quarter. The first statement of a quarter always carries some of the previous
+ * one, and seeing the number here is what stops it being a surprise later.
+ */
+function renderQuarterSplit() {
+  const host = $('pfSplit');
+  if (!host || !inspected) return;
+  const q = chosenQuarter();
+  const by = inspected.byQuarter || {};
+  const inQ = by[q] || 0;
+  const out = Object.entries(by).filter(([k]) => k !== q);
+  const outCount = out.reduce((s, [, n]) => s + n, 0);
+
+  if (!outCount) {
+    host.innerHTML = `<div class="pf-note">All ${inQ} transaction`
+      + `${inQ === 1 ? '' : 's'} fall inside ${escapeHtml(q)}.</div>`;
+    return;
+  }
+  host.innerHTML = `<div class="pf-note pf-note-warn"><strong>${inQ} transaction`
+    + `${inQ === 1 ? '' : 's'} counted in ${escapeHtml(q)}.</strong> `
+    + `${outCount} fall outside it (`
+    + out.map(([k, n]) => `${n} in ${escapeHtml(k)}`).join(', ')
+    + ') — these go on a separate sheet and are left out of every category total, '
+    + 'but they still count toward the reconciliation.</div>';
 }
 
 function rank(q) {
@@ -472,11 +501,17 @@ function renderResult(res, host, isReview) {
   // reconciliation banner — the single most important thing on the page
   const tied = res.controlTotal && Math.abs(res.variance) < 0.005;
   const banner = document.createElement('div');
+  const outsideBit = res.outside && res.outside.length
+    ? ` Plus ${res.outside.length} transaction${res.outside.length === 1 ? '' : 's'} `
+      + `totalling ${money(res.outsideTotal)} that fall outside ${res.quarter} and are `
+      + 'listed separately.'
+    : '';
   if (tied) {
     banner.className = 'banner banner-good';
     banner.innerHTML = `<span>✓</span><div><strong>Reconciled.</strong> `
-      + `${res.transactions.length} transactions totalling ${money(res.parsedTotal)}, `
-      + `matching the statement totals exactly.</div>`;
+      + `${res.transactions.length} transactions totalling ${money(res.parsedTotal)} `
+      + `in ${escapeHtml(res.quarter)}.${outsideBit} `
+      + 'Together these match the statement totals exactly.</div>';
   } else if (res.controlTotal) {
     banner.className = 'banner banner-bad';
     banner.innerHTML = `<span>!</span><div><strong>Does not reconcile.</strong> `
