@@ -1,6 +1,6 @@
-import { loadRules, saveRules, resetRules, learn } from './rules.js';
-import { run as runPipeline, applyReview } from './pipeline.js';
-import { readReviewedWorkbook } from './workbook.js';
+import { loadRules, saveRules, resetRules, learn, summarize } from './rules.js';
+import { run as runPipeline, inspect as inspectFiles, applyReview } from './pipeline.js';
+import { readReviewedWorkbook, readFiledWorkbook } from './workbook.js';
 import * as drive from './drive.js';
 
 const $ = (id) => document.getElementById(id);
@@ -10,6 +10,13 @@ const LS_LAST = 'statement-filer.lastRun';
 let rules = null;
 let files = [];
 let lastResult = null;
+
+// The preflight read of whatever is currently in the file list. Cached against
+// the file names and sizes so changing the target quarter, or flipping between
+// append and rebuild, never re-reads the PDFs — only a change to the files does.
+let inspected = null;
+let inspectedKey = '';
+let preflightSeq = 0;
 
 // pdf.js is loaded as a module so its worker can be wired up before first use
 const pdfjsLib = await import('../vendor/pdf.min.mjs');
@@ -27,8 +34,10 @@ rules = await loadRules();
 initTabs();
 initSettings();
 initDrop();
+initPreflight();
 initRules();
 initReview();
+initFiled();
 refreshDriveState();
 
 // ══════════════════════════════════════════════════════════════ tabs ══
@@ -80,6 +89,12 @@ function refreshDriveState() {
   $('driveState').textContent = on ? 'Drive connected' : 'Drive not connected';
   $('driveState').className = `pill ${on ? 'pill-on' : 'pill-off'}`;
   $('connectBtn').textContent = on ? 'Reconnect' : 'Connect Google Drive';
+  $('filedHint').textContent = on
+    ? 'Pick a card and quarter, then Open.'
+    : 'Connect Google Drive to browse what\'s filed.';
+  $('filedLoadBtn').disabled = !on;
+  // connecting mid-session is the common case — the lookup can only run now
+  if (on && files.length) refreshPreflight();
 }
 
 // ═══════════════════════════════════════════════════════ drop & run ══
@@ -100,7 +115,10 @@ function initDrop() {
   $('clearBtn').addEventListener('click', () => {
     files = [];
     lastResult = null;
+    inspected = null;
+    inspectedKey = '';
     renderFiles();
+    $('preflight').hidden = true;
     $('result').hidden = true;
     $('log').hidden = true;
   });
@@ -113,6 +131,7 @@ function addFiles(incoming) {
     files.push(f);
   }
   renderFiles();
+  refreshPreflight();
 }
 
 function renderFiles() {
@@ -129,7 +148,7 @@ function renderFiles() {
     const x = document.createElement('button');
     x.textContent = '×';
     x.title = 'Remove';
-    x.addEventListener('click', () => { files.splice(i, 1); renderFiles(); });
+    x.addEventListener('click', () => { files.splice(i, 1); renderFiles(); refreshPreflight(); });
     li.append(name, meta, x);
     list.append(li);
   });
@@ -146,17 +165,293 @@ function logTo(el, msg, isError = false) {
   el.scrollTop = el.scrollHeight;
 }
 
+// ═══════════════════════════════════════════════════════════ preflight ══
+// Everything the app can tell you before it does any work: which card it sees,
+// which quarter these statements belong to, and — the part that used to be
+// invisible — whether that quarter already has a workbook in Drive that this run
+// is about to add to.
+
+// Whether YOU chose rebuild, as opposed to the app falling back to it because
+// there was nothing to append to. Without this, switching the quarter to one
+// that IS filed would leave rebuild selected — and quietly overwrite it.
+let rebuildChosenByUser = false;
+
+function initPreflight() {
+  $('pfQuarter').addEventListener('change', () => {
+    // only the Drive side depends on the quarter; the PDFs are already read
+    renderPreflightFiled();
+  });
+  document.querySelectorAll('input[name="runMode"]').forEach((r) => {
+    r.addEventListener('change', (ev) => {
+      if (ev.isTrusted) rebuildChosenByUser = ev.target.value === 'rebuild';
+      updateRunButton();
+    });
+  });
+}
+
+const fileKey = () => files.map((f) => `${f.name}:${f.size}`).join('|');
+const chosenQuarter = () => $('pfQuarter').value || (inspected && inspected.quarter) || '';
+const chosenMode = () =>
+  (document.querySelector('input[name="runMode"]:checked') || {}).value || 'append';
+
+async function refreshPreflight() {
+  const panel = $('preflight');
+  if (!files.length) {
+    panel.hidden = true;
+    inspected = null;
+    inspectedKey = '';
+    updateRunButton();
+    return;
+  }
+
+  const key = fileKey();
+  if (key === inspectedKey && inspected) {
+    // same files, nothing to re-read — just refresh the Drive side
+    await renderPreflightFiled();
+    return;
+  }
+
+  const seq = ++preflightSeq;
+  panel.hidden = false;
+  $('pfBody').hidden = true;
+  $('pfBadge').hidden = true;
+  $('pfTitle').textContent = files.length === 1
+    ? 'Reading the statement…'
+    : `Reading ${files.length} statements…`;
+  updateRunButton();
+
+  try {
+    const seen = await inspectFiles(files, rules, libs(), () => {});
+    if (seq !== preflightSeq) return;   // a newer drop overtook this one
+    inspected = seen;
+    inspectedKey = key;
+  } catch (e) {
+    if (seq !== preflightSeq) return;
+    inspected = null;
+    inspectedKey = '';
+    $('pfTitle').textContent = 'Could not read those statements';
+    $('pfBadge').hidden = false;
+    $('pfBadge').className = 'pill pill-bad';
+    $('pfBadge').textContent = 'Not parsed';
+    $('pfBody').hidden = false;
+    $('pfStatements').innerHTML = '';
+    $('pfFiled').innerHTML = `<div class="pf-note pf-note-warn">${escapeHtml(e.message)}</div>`;
+    $('pfMode').hidden = true;
+    $('pfQuarter').innerHTML = '';
+    $('pfPath').textContent = '—';
+    updateRunButton();
+    return;
+  }
+
+  $('pfMode').hidden = false;
+  $('pfTitle').textContent = `${inspected.cardLabel} · ${inspected.statements.length} statement`
+    + `${inspected.statements.length === 1 ? '' : 's'}`;
+  $('pfStatements').innerHTML = inspected.statements
+    .map((s) => `<span class="chip chip-static">${escapeHtml(s.label)} · ${s.count} txns</span>`)
+    .join('');
+
+  await fillQuarterOptions();
+  $('pfBody').hidden = false;
+  await renderPreflightFiled();
+}
+
+/**
+ * The quarter picker holds the quarter these statements point at, every quarter
+ * this card already has a folder for, and the quarters on either side of the
+ * detected one — enough to refile into a neighbouring quarter without offering
+ * a list of every quarter that has ever existed.
+ */
+async function fillQuarterOptions() {
+  const sel = $('pfQuarter');
+  const wanted = new Set([inspected.quarter, ...inspected.quarters]);
+  for (const q of neighbours(inspected.quarter)) wanted.add(q);
+  if (drive.isSignedIn()) {
+    try {
+      for (const q of await drive.listQuarters(inspected.card, inspected.fiscalYear, rules)) {
+        wanted.add(q);
+      }
+    } catch (_) { /* the picker is still usable without Drive */ }
+  }
+  const list = [...wanted].sort((a, b) => rank(b) - rank(a));
+  sel.innerHTML = list
+    .map((q) => `<option value="${q}"${q === inspected.quarter ? ' selected' : ''}>${q}</option>`)
+    .join('');
+  sel.value = inspected.quarter;
+  $('pfQuarterNote').textContent = inspected.quarters.length > 1
+    ? `these statements span ${inspected.quarters.join(' and ')}`
+    : '';
+}
+
+function rank(q) {
+  const m = String(q).match(/^Q([1-4]) (\d{4})$/);
+  return m ? Number(m[2]) * 10 + Number(m[1]) : 0;
+}
+
+function neighbours(q) {
+  const m = String(q).match(/^Q([1-4]) (\d{4})$/);
+  if (!m) return [];
+  let n = Number(m[1]);
+  let y = Number(m[2]);
+  const out = [];
+  for (const step of [-1, 1]) {
+    let qq = n + step;
+    let yy = y;
+    if (qq === 0) { qq = 4; yy--; }
+    if (qq === 5) { qq = 1; yy++; }
+    out.push(`Q${qq} ${yy}`);
+  }
+  return out;
+}
+
+/** The Drive half of the panel: what this card+quarter already holds. */
+async function renderPreflightFiled() {
+  const host = $('pfFiled');
+  const badge = $('pfBadge');
+  if (!inspected) return;
+  const quarter = chosenQuarter();
+
+  if (!drive.isSignedIn()) {
+    badge.hidden = false;
+    badge.className = 'pill pill-warn';
+    badge.textContent = 'Drive not connected';
+    host.innerHTML = '<div class="pf-note pf-note-warn">'
+      + '<strong>Connect Google Drive to add to an existing quarter.</strong> '
+      + 'Without it the app can\'t see what\'s already filed, so this run would build '
+      + `${escapeHtml(quarter)} from these statements alone.</div>`;
+    $('pfPath').textContent = '—';
+    setAppendAvailable(false, 'Needs Drive connected.');
+    updateRunButton();
+    return;
+  }
+
+  host.innerHTML = '<div class="pf-note">Checking Drive…</div>';
+  const seq = preflightSeq;
+  let probe = null;
+  try {
+    probe = await drive.probeFiled(inspected.card, quarter, inspected.fiscalYear, rules);
+  } catch (e) {
+    if (seq !== preflightSeq) return;
+    host.innerHTML = `<div class="pf-note pf-note-warn">Could not reach Drive: `
+      + `${escapeHtml(e.message)}</div>`;
+    setAppendAvailable(false, 'Drive lookup failed.');
+    updateRunButton();
+    return;
+  }
+  if (seq !== preflightSeq) return;
+
+  $('pfPath').textContent = probe
+    ? probe.path
+    : `${rules.driveRoot.map((n) => n.replace('{fy}', inspected.fiscalYear)).join(' / ')}`
+      + ` / ${rules.cards[inspected.card].driveFolder} / ${quarter}  (will be created)`;
+
+  if (!probe || !probe.workbook) {
+    badge.hidden = false;
+    badge.className = 'pill pill-on';
+    badge.textContent = 'New quarter';
+    host.innerHTML = `<div class="pf-note">Nothing filed under <strong>${escapeHtml(quarter)}</strong> `
+      + 'yet — this run creates it.</div>';
+    setAppendAvailable(false, 'Nothing filed yet, so there is nothing to add to.');
+    updateRunButton();
+    return;
+  }
+
+  // read the filed workbook so the panel can say what is actually in it
+  let filed = null;
+  try {
+    const bytes = await drive.downloadFile(probe.workbook.id);
+    if (seq !== preflightSeq) return;
+    filed = await readFiledWorkbook(window.ExcelJS, bytes, inspected.card, rules);
+  } catch (e) {
+    host.innerHTML = `<div class="pf-note pf-note-warn">`
+      + `<strong>${escapeHtml(probe.workbook.name)}</strong> is filed, but could not be read: `
+      + `${escapeHtml(e.message)}</div>`;
+    setAppendAvailable(true, '');
+    updateRunButton();
+    return;
+  }
+
+  const reviewCat = rules.reviewCategory || 'Review';
+  const pending = filed.rows.filter((t) => t.category === reviewCat).length;
+  const already = new Set(filed.statements.map((s) => s.label));
+  const dupes = inspected.statements.filter((s) => already.has(s.label));
+  const adding = inspected.statements.filter((s) => !already.has(s.label));
+
+  badge.hidden = false;
+  badge.className = 'pill pill-on';
+  badge.textContent = 'Already filed';
+
+  const bits = [];
+  bits.push(
+    `<div class="pf-note"><strong><a href="${probe.workbook.url}" target="_blank" `
+    + `rel="noopener">${escapeHtml(probe.workbook.name)}</a></strong> is already filed — `
+    + `${filed.rows.length} row${filed.rows.length === 1 ? '' : 's'} covering `
+    + `${filed.statements.map((s) => escapeHtml(s.label)).join(' & ') || 'no listed statements'}`
+    + (pending
+      ? `, <strong>${pending} still awaiting a decision</strong> on the Review sheet`
+      : ', nothing outstanding on the Review sheet')
+    + '.</div>'
+  );
+  if (dupes.length) {
+    bits.push(
+      `<div class="pf-note pf-note-warn">${dupes.map((s) => escapeHtml(s.label)).join(' & ')} `
+      + `${dupes.length === 1 ? 'is' : 'are'} already in that workbook and will be skipped, `
+      + 'so re-dropping costs nothing.</div>'
+    );
+  }
+  host.innerHTML = bits.join('');
+
+  $('pfAppendHint').textContent = adding.length
+    ? `Keeps the ${filed.rows.length} rows already filed and adds `
+      + `${adding.map((s) => s.label).join(' & ')}.`
+    : 'Everything you\'ve loaded is already filed — this would rebuild the same workbook.';
+  setAppendAvailable(true, '');
+  updateRunButton();
+}
+
+function setAppendAvailable(ok, why) {
+  const append = document.querySelector('input[name="runMode"][value="append"]');
+  const rebuild = document.querySelector('input[name="runMode"][value="rebuild"]');
+  append.disabled = !ok;
+  append.closest('.pf-radio').classList.toggle('is-disabled', !ok);
+  if (!ok) {
+    rebuild.checked = true;
+    $('pfAppendHint').textContent = why;
+  } else if (!rebuildChosenByUser) {
+    // append became possible again (you changed quarter, or connected Drive):
+    // fall back to the safe mode unless you asked for rebuild yourself
+    append.checked = true;
+  }
+}
+
+function updateRunButton() {
+  const btn = $('runBtn');
+  btn.disabled = files.length === 0;
+  if (!files.length || !inspected) {
+    btn.textContent = 'Analyze';
+    return;
+  }
+  btn.textContent = chosenMode() === 'rebuild'
+    ? `Rebuild ${chosenQuarter()}`
+    : `Add to ${chosenQuarter()}`;
+}
+
+// ═════════════════════════════════════════════════════════════════ run ══
 async function doRun() {
   const log = $('log');
   log.innerHTML = '';
   $('result').hidden = true;
   $('runBtn').disabled = true;
+  const mode = chosenMode();
+  const quarter = chosenQuarter();
   try {
     lastResult = await runPipeline(files, rules, libs(), (m) => logTo(log, m), {
       // merge by default: if this card and quarter are already filed, add to it
       fetchFiled: drive.isSignedIn()
-        ? (card, quarter, fy) => drive.fetchFiled(card, quarter, fy, rules, (m) => logTo(log, m))
+        ? (card, q, fy) => drive.fetchFiled(card, q, fy, rules, (m) => logTo(log, m))
         : null,
+      inspected: inspectedKey === fileKey() ? inspected : null,
+      quarter,
+      mode,
     });
     logTo(log, 'Done.');
     renderResult(lastResult, $('result'), false);
@@ -165,7 +460,7 @@ async function doRun() {
     logTo(log, e.message, true);
     console.error(e);
   } finally {
-    $('runBtn').disabled = files.length === 0;
+    updateRunButton();
   }
 }
 
@@ -197,7 +492,10 @@ function renderResult(res, host, isReview) {
   const card = document.createElement('div');
   card.className = 'card';
   card.innerHTML = `<h2>${res.cardLabel} · ${res.quarter}</h2>`
-    + `<p class="muted small">Filed under fiscal year ending September ${res.fiscalYear}.</p>`;
+    + `<p class="muted small">Filed under fiscal year ending September ${res.fiscalYear}`
+    + (res.quarterOverridden ? ` · quarter chosen by hand (auto would be ${res.quarterAuto})` : '')
+    + '.</p>'
+    + mergeLine(res);
 
   const wrap = document.createElement('div');
   wrap.className = 'table-wrap';
@@ -255,6 +553,27 @@ function renderResult(res, host, isReview) {
   card.append(actions);
 
   host.append(card);
+}
+
+/** One line saying, in plain terms, what this run did to the quarter. */
+function mergeLine(res) {
+  const m = res.merged || {};
+  if (res.mode === 'rebuild') {
+    return '<p class="pf-note pf-note-warn">Rebuilt from scratch — '
+      + `${res.transactions.length} rows from the statements loaded. Anything previously filed `
+      + `under ${escapeHtml(res.quarter)} has been replaced.</p>`;
+  }
+  if (!m.carried) return '';
+  const parts = [`<strong>${m.carried}</strong> row${m.carried === 1 ? '' : 's'} carried forward`,
+                 `<strong>${m.added}</strong> added this run`];
+  if (m.skipped && m.skipped.length) {
+    parts.push(`${m.skipped.map(escapeHtml).join(' & ')} skipped as already filed`);
+  }
+  if (m.carriedReview) {
+    parts.push(`<strong>${m.carriedReview}</strong> older item`
+      + `${m.carriedReview === 1 ? '' : 's'} still awaiting your decision`);
+  }
+  return `<p class="pf-note">Added to the quarter: ${parts.join(', ')}.</p>`;
 }
 
 function downloadChip(text, bytes, mime, fileName) {
@@ -346,6 +665,150 @@ async function doApplyReview(arrayBuffer) {
     logTo(log, e.message, true);
     console.error(e);
   }
+}
+
+// ════════════════════════════════════════════════════════ what's filed ══
+// A read-only window onto a quarter. Nothing here writes to Drive — it exists
+// so you can answer "what's in Q3 and what's still waiting on me?" without
+// loading a single PDF.
+
+function initFiled() {
+  const cardSel = $('filedCard');
+  cardSel.innerHTML = Object.entries(rules.cards)
+    .map(([id, c]) => `<option value="${id}">${escapeHtml(c.label)}</option>`).join('');
+
+  const thisYear = new Date().getFullYear();
+  $('filedFy').innerHTML = [thisYear + 1, thisYear, thisYear - 1, thisYear - 2]
+    .map((y) => `<option value="${y}"${y === thisYear ? ' selected' : ''}>`
+      + `${rules.fiscalFolderTemplate.replace('{fy}', y)}</option>`).join('');
+
+  const reload = () => fillFiledQuarters();
+  cardSel.addEventListener('change', reload);
+  $('filedFy').addEventListener('change', reload);
+  $('filedLoadBtn').addEventListener('click', doFiledLoad);
+
+  document.querySelector('.tab[data-tab="filed"]').addEventListener('click', () => {
+    if (drive.isSignedIn() && !$('filedQuarter').options.length) fillFiledQuarters();
+  });
+}
+
+async function fillFiledQuarters() {
+  const sel = $('filedQuarter');
+  if (!drive.isSignedIn()) { sel.innerHTML = ''; return; }
+  sel.innerHTML = '<option>…</option>';
+  try {
+    const qs = await drive.listQuarters($('filedCard').value, Number($('filedFy').value), rules);
+    sel.innerHTML = qs.length
+      ? qs.map((q) => `<option value="${q}">${q}</option>`).join('')
+      : '<option value="">nothing filed yet</option>';
+    $('filedHint').textContent = qs.length
+      ? 'Pick a quarter, then Open.'
+      : 'No quarters filed under that card and audit year yet.';
+  } catch (e) {
+    sel.innerHTML = '';
+    $('filedHint').textContent = `Could not list quarters: ${e.message}`;
+  }
+}
+
+async function doFiledLoad() {
+  const log = $('filedLog');
+  const host = $('filedResult');
+  log.innerHTML = '';
+  host.hidden = true;
+  const card = $('filedCard').value;
+  const fy = Number($('filedFy').value);
+  const quarter = $('filedQuarter').value;
+  if (!quarter) { logTo(log, 'Pick a quarter first.', true); return; }
+
+  $('filedLoadBtn').disabled = true;
+  try {
+    logTo(log, `Looking up ${rules.cards[card].label} ${quarter}…`);
+    const probe = await drive.probeFiled(card, quarter, fy, rules);
+    if (!probe || !probe.workbook) {
+      logTo(log, `No workbook filed under ${quarter} yet.`, true);
+      return;
+    }
+    logTo(log, `Reading ${probe.workbook.name}…`);
+    const bytes = await drive.downloadFile(probe.workbook.id);
+    const filed = await readFiledWorkbook(window.ExcelJS, bytes, card, rules);
+    logTo(log, 'Done.');
+    renderFiled(host, { card, quarter, probe, filed });
+  } catch (e) {
+    logTo(log, e.message, true);
+    console.error(e);
+  } finally {
+    $('filedLoadBtn').disabled = !drive.isSignedIn();
+  }
+}
+
+function renderFiled(host, { card, quarter, probe, filed }) {
+  host.hidden = false;
+  host.innerHTML = '';
+  const reviewCat = rules.reviewCategory || 'Review';
+  const pending = filed.rows.filter((t) => t.category === reviewCat);
+  const total = filed.rows.reduce((s, t) => s + t.amount, 0);
+
+  const banner = document.createElement('div');
+  banner.className = pending.length ? 'banner banner-warn' : 'banner banner-good';
+  banner.innerHTML = pending.length
+    ? `<span>!</span><div><strong>${pending.length} item`
+      + `${pending.length === 1 ? '' : 's'} waiting on you.</strong> `
+      + `Open the workbook, fill in the COMMENTS column on the Review sheet, then bring it `
+      + 'back to the "Apply my review" tab.</div>'
+    : `<span>✓</span><div><strong>Nothing outstanding.</strong> Every row in this quarter `
+      + 'has a category.</div>';
+  host.append(banner);
+
+  const c = document.createElement('div');
+  c.className = 'card';
+  c.innerHTML = `<h2>${escapeHtml(rules.cards[card].label)} · ${escapeHtml(quarter)}</h2>`
+    + `<p class="muted small mono">${escapeHtml(probe.path)}</p>`
+    + `<p class="muted">${filed.rows.length} rows totalling ${money(Math.round(total * 100) / 100)}, `
+    + `covering ${filed.statements.map((s) => escapeHtml(s.label)).join(' & ') || '—'}.</p>`;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'table-wrap';
+  const summary = summarize(filed.rows);
+  wrap.innerHTML = '<table><thead><tr><th>Category</th><th class="num">Amount</th></tr></thead>'
+    + '<tbody>'
+    + Object.entries(summary)
+      .map(([k, v]) => `<tr${k === reviewCat ? ' class="is-review"' : ''}>`
+        + `<td>${escapeHtml(k)}</td><td class="num">${money(v)}</td></tr>`).join('')
+    + `<tr class="total"><td>Grand Total</td>`
+    + `<td class="num">${money(Math.round(total * 100) / 100)}</td></tr></tbody></table>`;
+  c.append(wrap);
+
+  if (pending.length) {
+    const pw = document.createElement('div');
+    pw.className = 'table-wrap';
+    pw.innerHTML = '<h3>Still in Review</h3>'
+      + '<table><thead><tr><th>Date</th><th>Merchant</th><th class="num">Amount</th>'
+      + '<th>Note</th></tr></thead><tbody>'
+      + pending.map((t) => `<tr><td>${escapeHtml(t.date)}</td>`
+        + `<td>${escapeHtml(t.desc)}</td><td class="num">${money(t.amount)}</td>`
+        + `<td class="small muted">${escapeHtml(t.note || '')}</td></tr>`).join('')
+      + '</tbody></table>';
+    c.append(pw);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const openWb = document.createElement('a');
+  openWb.className = 'btn';
+  openWb.target = '_blank';
+  openWb.rel = 'noopener';
+  openWb.href = probe.workbook.url;
+  openWb.textContent = 'Open the workbook in Drive';
+  const openFolder = document.createElement('a');
+  openFolder.className = 'btn btn-ghost';
+  openFolder.target = '_blank';
+  openFolder.rel = 'noopener';
+  openFolder.href = probe.folderUrl;
+  openFolder.textContent = 'Open the quarter folder';
+  actions.append(openWb, openFolder);
+  c.append(actions);
+
+  host.append(c);
 }
 
 // ═════════════════════════════════════════════════════════════ rules ══
