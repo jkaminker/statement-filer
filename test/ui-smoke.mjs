@@ -83,6 +83,66 @@ check(
   'Open is disabled while Drive is not connected'
 );
 
+// A rules copy saved before the wave block existed must not disable the
+// feature. This is the shape of Jeff's actual localStorage: 550 merchant
+// rules and no 'wave' key.
+console.log('\n--- C1. stored rules predating a feature still get it');
+await page.evaluate(() => {
+  localStorage.setItem('statement-filer.rules', JSON.stringify({
+    version: 1, fiscalYearEndMonth: 9, reviewCategory: 'Review',
+    driveRoot: ['Annual Audit {fy} Sep', 'Credit Card Statements'],
+    cards: { amex: { label: 'Amex' } }, merchants: { amex: { 'OLD MERCHANT': 'Meals' } },
+  }));
+});
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForFunction(() => !!window.ExcelJS && !!window.PDFLib, null, { timeout: 30000 });
+await page.waitForTimeout(400);
+await page.click('.tab[data-tab="wave"]');
+await page.waitForTimeout(250);
+check(
+  (await page.locator('#wvAnchor').textContent()).includes('Shareholder Loan'),
+  'the wave block is backfilled into an older stored rules copy'
+);
+check(
+  await page.evaluate(() => JSON.parse(localStorage.getItem('statement-filer.rules')).merchants.amex['OLD MERCHANT'] === 'Meals'),
+  'and the stored merchant rules are left untouched'
+);
+await page.evaluate(() => localStorage.removeItem('statement-filer.rules'));
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForFunction(() => !!window.ExcelJS && !!window.PDFLib, null, { timeout: 30000 });
+await page.waitForTimeout(400);
+
+console.log('\n--- C2. the Post to Wave tab');
+await page.click('.tab[data-tab="wave"]');
+await page.waitForTimeout(250);
+check(await page.locator('#tab-wave').isVisible(), 'the tab opens');
+check(
+  await page.locator('#wvToken').getAttribute('type') === 'password',
+  'the token field is masked'
+);
+check(
+  await page.locator('#wvToken').getAttribute('autocomplete') === 'off',
+  'and is kept out of autofill — a full-access key should not be remembered'
+);
+check(
+  (await page.locator('#wvState').textContent()).trim() === 'Not connected',
+  'it starts disconnected'
+);
+check(await page.locator('#wvDisconnect').isHidden(), 'with nothing to disconnect from');
+check(
+  (await page.locator('#wvAnchor').textContent()).includes('Shareholder Loan'),
+  'the anchor account is read from the rules, not hard-coded'
+);
+check(
+  (await page.locator('#wvPreview').textContent()).includes('Analyze a card first'),
+  'and it says what is missing instead of showing an empty table'
+);
+// Nothing may be posted before a run exists.
+check(
+  await page.locator('#wvPreview button').count() === 0,
+  'no post button exists with no run loaded'
+);
+
 console.log('\n--- D. the run button says what it will do');
 await page.click('.tab[data-tab="process"]');
 check(
