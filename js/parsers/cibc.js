@@ -7,7 +7,7 @@
 //
 // Control total is "Total for <card number>", which is purchases net of credits.
 
-import { MONTHS, AMOUNT_RE, rowsOf, toNumber, resolveYear, isoDate } from './base.js';
+import { MONTHS, monthNum, AMOUNT_RE, rowsOf, toNumber, resolveYear, isoDate } from './base.js';
 
 const FX_RE = /^([\d,.]+)\s+([A-Z]{3})\s+@\s+([\d.]+)/;
 const PROVINCES = ['ON', 'QC', 'NL', 'NS', 'NB', 'PE', 'MB', 'SK', 'AB', 'BC', 'YT', 'NT', 'NU'];
@@ -27,8 +27,18 @@ function statementPeriod(pages) {
     for (const row of rowsOf(page)) {
       const m = row.text.match(PERIOD_RE);
       if (m) {
+        // Fail loudly rather than carrying an undefined month into the
+        // statement date, the filename and the Drive path.
+        if (monthNum(m[3]) === undefined) {
+          throw new Error(
+            `Could not read the month in this CIBC statement period: "${m[0]}". `
+            + 'The statement may use a date format this parser does not know yet.'
+          );
+        }
         return {
-          endMonth: MONTHS[m[3]],
+          // CIBC writes this line out in full — "September 14 to October 13,
+          // 2026" — so the abbreviation map alone misses it.
+          endMonth: monthNum(m[3]),
           endDay: +m[4],
           year: +m[5],
         };
