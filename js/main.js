@@ -2,6 +2,7 @@ import { loadRules, saveRules, resetRules, learn, summarize } from './rules.js';
 import { run as runPipeline, inspect as inspectFiles, applyReview } from './pipeline.js';
 import { readReviewedWorkbook, readFiledWorkbook } from './workbook.js';
 import * as drive from './drive.js';
+import * as wave from './wave.js';
 import { fiscalYearOfQuarter } from './parsers/base.js';
 
 const $ = (id) => document.getElementById(id);
@@ -39,6 +40,7 @@ initPreflight();
 initRules();
 initReview();
 initFiled();
+initWave();
 refreshDriveState();
 
 // ══════════════════════════════════════════════════════════════ tabs ══
@@ -615,6 +617,19 @@ function renderResult(res, host, isReview) {
   fileBtn.title = tied ? '' : 'Reconcile first';
   fileBtn.addEventListener('click', () => doFile(res, host));
   actions.append(fileBtn);
+
+  // Same gate as filing: a quarter that does not reconcile has no business
+  // being posted to the books either.
+  const waveBtn = document.createElement('button');
+  waveBtn.className = 'btn btn-ghost';
+  waveBtn.textContent = 'Post to Wave…';
+  waveBtn.disabled = !tied;
+  waveBtn.title = tied ? '' : 'Reconcile first';
+  waveBtn.addEventListener('click', () => {
+    document.querySelector('.tab[data-tab="wave"]').click();
+    renderWavePreview();
+  });
+  actions.append(waveBtn);
   card.append(actions);
 
   host.append(card);
@@ -877,6 +892,168 @@ function renderFiled(host, { card, quarter, probe, filed }) {
 }
 
 // ═════════════════════════════════════════════════════════════ rules ══
+// ══════════════════════════════════════════════════════════════ wave ══
+let waveAccounts = null;   // { byName, accounts } for the chosen business
+
+function initWave() {
+  $('wvAnchor').textContent = rules.wave?.anchorAccount || 'your shareholder loan account';
+
+  $('wvConnect').addEventListener('click', async () => {
+    const btn = $('wvConnect');
+    const input = $('wvToken');
+    btn.disabled = true;
+    const was = btn.textContent;
+    btn.textContent = 'Connecting…';
+    try {
+      const businesses = await wave.connect(input.value);
+      // The token is now held inside wave.js. Clear the box so a full-access
+      // credential is not left sitting in the DOM for the rest of the session.
+      input.value = '';
+      const sel = $('wvBusiness');
+      sel.innerHTML = businesses
+        .map((b) => `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)}</option>`)
+        .join('');
+      $('wvBusinessWrap').hidden = businesses.length < 2;
+      await loadWaveAccounts();
+      refreshWaveState();
+      renderWavePreview();
+    } catch (e) {
+      alert(`Could not connect to Wave.\n\n${e.message}`);
+      refreshWaveState();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = was;
+    }
+  });
+
+  $('wvDisconnect').addEventListener('click', () => {
+    wave.signOut();
+    waveAccounts = null;
+    refreshWaveState();
+    renderWavePreview();
+  });
+
+  $('wvBusiness').addEventListener('change', async () => {
+    await loadWaveAccounts();
+    renderWavePreview();
+  });
+
+  document.querySelector('.tab[data-tab="wave"]').addEventListener('click', renderWavePreview);
+  refreshWaveState();
+}
+
+async function loadWaveAccounts() {
+  waveAccounts = null;
+  try {
+    waveAccounts = await wave.listAccounts($('wvBusiness').value);
+  } catch (e) {
+    alert(`Connected, but could not read your chart of accounts.\n\n${e.message}`);
+  }
+}
+
+function refreshWaveState() {
+  const on = wave.isConnected();
+  $('wvState').textContent = on ? 'Connected' : 'Not connected';
+  $('wvState').className = `pill ${on ? 'pill-on' : 'pill-off'}`;
+  $('wvConnect').textContent = on ? 'Reconnect' : 'Connect to Wave';
+  $('wvDisconnect').hidden = !on;
+}
+
+function renderWavePreview() {
+  const host = $('wvPreview');
+  host.innerHTML = '';
+  if (!lastResult) {
+    host.innerHTML = '<div class="pf-note">Analyze a card first — the preview is built from the finished run.</div>';
+    return;
+  }
+
+  let plan;
+  try {
+    plan = wave.planEntries(lastResult, rules);
+  } catch (e) {
+    host.innerHTML = `<div class="pf-note pf-note-warn">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  const anchor = rules.wave?.anchorAccount || '(no anchor account set)';
+
+  const rows = plan.entries.map((e) => `
+    <tr>
+      <td>${escapeHtml(e.date)}</td>
+      <td>${escapeHtml(e.description)}</td>
+      <td>${escapeHtml(e.account)}</td>
+      <td class="num">${money(e.direction === 'WITHDRAWAL' ? e.amount : -e.amount)}</td>
+    </tr>`).join('');
+
+  const excluded = plan.excluded.length
+    ? `<p class="muted small">Not posted (personal, never the company's):
+         ${plan.excluded.map((x) => `${escapeHtml(x.category)} ${money(x.amount)}`).join(' · ')}</p>`
+    : '';
+
+  const blocked = plan.unmapped.length
+    ? `<div class="pf-note pf-note-warn">
+         <strong>Nothing will post until these are mapped.</strong>
+         ${plan.unmapped.map((x) => `${escapeHtml(x.category)} (${money(x.amount)})`).join(', ')}
+         — add them under <code>wave.accounts</code> in the Rules tab. They are held back
+         rather than dropped, so no money goes missing quietly.
+       </div>`
+    : '';
+
+  card.innerHTML = `
+    <h2>${escapeHtml(lastResult.quarter)} · ${escapeHtml(lastResult.cardLabel || lastResult.card)}</h2>
+    <p class="muted">
+      ${plan.entries.length} transaction${plan.entries.length === 1 ? '' : 's'} on
+      <strong>${escapeHtml(anchor)}</strong>, dated ${escapeHtml(plan.entries[0]?.date || '—')}.
+    </p>
+    ${blocked}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="num">Amount</th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr class="total"><td colspan="3">Total</td><td class="num">${money(plan.total)}</td></tr></tfoot>
+      </table>
+    </div>
+    ${excluded}
+    <p class="muted small">
+      Re-posting is safe: every line carries a stable id, so running this twice
+      updates the same transactions instead of creating a second set.
+    </p>`;
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const post = document.createElement('button');
+  post.className = 'btn btn-primary';
+  post.textContent = `Post ${plan.entries.length} transaction${plan.entries.length === 1 ? '' : 's'} to Wave`;
+  post.disabled = !wave.isConnected() || !waveAccounts || !plan.entries.length || !!plan.unmapped.length;
+  post.title = !wave.isConnected() ? 'Connect to Wave first'
+    : plan.unmapped.length ? 'Map every category first'
+    : '';
+  post.addEventListener('click', () => doWavePost(plan, post));
+  actions.append(post);
+  card.append(actions);
+  host.append(card);
+}
+
+async function doWavePost(plan, btn) {
+  const anchor = rules.wave?.anchorAccount;
+  btn.disabled = true;
+  const was = btn.textContent;
+  btn.textContent = 'Posting…';
+  try {
+    const { posted } = await wave.post(
+      $('wvBusiness').value, plan.entries, waveAccounts.byName, anchor
+    );
+    btn.textContent = `Posted ${posted} to Wave`;
+    alert(`Posted ${posted} transaction${posted === 1 ? '' : 's'} to Wave, totalling ${money(plan.total)}.`);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = was;
+    alert(`Wave did not accept the transactions.\n\nNothing was posted.\n\n${e.message}`);
+  }
+}
+
 function initRules() {
   $('rulesText').value = JSON.stringify(rules, null, 1);
   const merchants = Object.values(rules.merchants || {})
@@ -915,8 +1092,10 @@ function initRules() {
       for (const card of Object.keys(incoming.merchants)) {
         rules.merchants[card] = { ...(rules.merchants[card] || {}), ...incoming.merchants[card] };
       }
+      // 'wave' is here so the account mapping and the anchor account can live in
+      // your private my-rules.json rather than the public repo.
       for (const key of ['alwaysReview', 'spendCategoryDefaults', 'gtaRule',
-                         'largeAmountReview', 'cards', 'fiscalYearEndMonth']) {
+                         'largeAmountReview', 'cards', 'fiscalYearEndMonth', 'wave']) {
         if (incoming[key] !== undefined) rules[key] = incoming[key];
       }
       saveRules(rules);
