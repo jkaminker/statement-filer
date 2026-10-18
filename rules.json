@@ -18,6 +18,35 @@
   "Credit Card Statements"
  ],
  "reviewCategory": "Review",
+ "wave": {
+  "_readme": [
+   "Posting a finished quarter into Wave. anchorAccount is the account the cards",
+   "are settled through - each category posts as a withdrawal on it, with the",
+   "expense account as the line item.",
+   "exclude: categories that are never posted. Personal spending is the company's",
+   "business only in the sense that it must stay OUT of the company's books.",
+   "accounts: workbook category -> EXACT Wave account name. A category missing",
+   "from this map blocks posting rather than being dropped silently."
+  ],
+  "anchorAccount": "Shareholder Loan - Jeff Kaminker",
+  "exclude": [
+   "Personal",
+   "Personal - Home Insurance"
+  ],
+  "accounts": {
+   "Business Travel": "Business Travel",
+   "Travel - Domestic": "Travel - Domestic",
+   "Travel": "Business Travel",
+   "Professional Fees": "Professional Fees",
+   "Meals": "Meals and Entertainment",
+   "Rent": "Rent Expense",
+   "Office Supplies": "Office Supplies",
+   "Office Equipment": "Office Supplies",
+   "Phone": "Telephone – Wireless",
+   "Fuel": "Vehicle – Fuel",
+   "Health - Insurance": "Health Insurance - Greenfield"
+  }
+ },
  "highlightColor": [
   0.988,
   0.957,
