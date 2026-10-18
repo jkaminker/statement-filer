@@ -1,6 +1,6 @@
 // Orchestrates a run: statements in, categorized workbook + highlighted PDFs out.
 
-import { readPages, quarterOf, fiscalYearOf, quarterBounds, inQuarter } from './parsers/base.js';
+import { readPages, quarterOf, fiscalYearOf, fiscalYearOfQuarter, quarterBounds, inQuarter } from './parsers/base.js';
 import { detectCard } from './parsers/registry.js';
 import { categorize, summarize, applyGtaRule, canonicalCategory } from './rules.js';
 import { buildWorkbook, readFiledWorkbook } from './workbook.js';
@@ -62,7 +62,12 @@ export async function inspect(files, rules, libs, onProgress = () => {}) {
 
   const quarters = [...new Set(dates.map(quarterOf))];
   const quarter = dominant(dates.map(quarterOf));
-  const fiscalYear = fiscalYearOf(dates[dates.length - 1], rules.fiscalYearEndMonth);
+  // The quarter decides the fiscal-year folder, never the statement's own
+  // dates — an October statement finishing off Q3 still files under the
+  // Q3 fiscal year. Falls back to the statement dates only if the quarter
+  // label is unparseable.
+  const fiscalYear = fiscalYearOfQuarter(quarter, rules.fiscalYearEndMonth)
+    ?? fiscalYearOf(dates[dates.length - 1], rules.fiscalYearEndMonth);
 
   // how the rows fall across quarters, so the Process tab can warn you that a
   // statement straddles a boundary before you commit to anything
@@ -113,7 +118,10 @@ export async function run(files, rules, libs, onProgress = () => {}, opts = {}) 
   // ------------------------------------------- 2. group by card and quarter
   const quarters = seen.quarters;
   const quarter = opts.quarter || seen.quarter;
-  const fiscalYear = seen.fiscalYear;
+  // Recomputed from the chosen quarter: picking a different quarter in the
+  // preflight must move the fiscal-year folder with it, and seen.fiscalYear
+  // was worked out before that choice existed.
+  const fiscalYear = fiscalYearOfQuarter(quarter, rules.fiscalYearEndMonth) ?? seen.fiscalYear;
   const mode = opts.mode === 'rebuild' ? 'rebuild' : 'append';
 
   // ------------------------------------------- 2b. merge with what's filed
