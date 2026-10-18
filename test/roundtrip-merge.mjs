@@ -334,6 +334,76 @@ check(monthNum('Mayfair') === undefined,
   'nor is "Mayfair" read as May', String(monthNum('Mayfair')));
 check(monthNum(undefined) === undefined, 'undefined in, undefined out');
 
+// ─────────────────────────────────── what actually reaches the ledger ──
+// planEntries decides what gets written into Wave. Everything the preview
+// shows comes from it, so these checks are the difference between a correct
+// quarter and a wrong one posted confidently.
+console.log('\n--- H. the Wave posting plan');
+const { planEntries } = await import(path.join(ROOT, 'js/wave.js'));
+
+const waveRun = {
+  card: 'amex',
+  cardLabel: 'Amex',
+  quarter: 'Q3 2026',
+  summary: {
+    'Business Travel': 21702.77,
+    'Travel - Domestic': 14454.65,
+    'Travel': 2456.44,
+    'Professional Fees': 9839.12,
+    'Meals': 3588.65,
+    'Rent': 1826.09,
+    'Personal': 11286.00,
+    'Personal - Home Insurance': 1096.71,
+  },
+};
+const plan = planEntries(waveRun, rules);
+const byAccount = {};
+for (const e of plan.entries) byAccount[e.account] = round2((byAccount[e.account] || 0) + e.amount);
+
+check(plan.unmapped.length === 0, 'every business category maps to a Wave account',
+  plan.unmapped.map((u) => u.category).join(', ') || 'none unmapped');
+check(plan.total === 53867.72, 'the posted total is business-only', `$${plan.total}`);
+check(round2(plan.excluded.reduce((s, x) => s + x.amount, 0)) === 12382.71,
+  'personal is held out, not netted', `$${round2(plan.excluded.reduce((s, x) => s + x.amount, 0))}`);
+check(!plan.entries.some((e) => /Personal/.test(e.category)),
+  'no personal category reaches the ledger');
+check(byAccount['Business Travel'] === 24159.21,
+  'plain Travel folds into Business Travel', `$${byAccount['Business Travel']}`);
+check(byAccount['Meals and Entertainment'] === 3588.65,
+  'Meals maps to the Wave account name', `$${byAccount['Meals and Entertainment']}`);
+check(plan.entries.every((e) => e.date === '2026-09-30'),
+  'every line is dated the quarter end');
+check(plan.entries.every((e) => e.direction === 'WITHDRAWAL' && e.balance === 'DEBIT'),
+  'expenses are withdrawals debiting the expense account');
+
+// Re-planning the same run must produce the same ids, or a second post would
+// duplicate the quarter instead of updating it.
+const again = planEntries(waveRun, rules);
+check(JSON.stringify(plan.entries.map((e) => e.externalId))
+   === JSON.stringify(again.entries.map((e) => e.externalId)),
+  'ids are stable across runs, so re-posting cannot duplicate');
+check(new Set(plan.entries.map((e) => e.externalId)).size === plan.entries.length,
+  'and unique within the run');
+check(plan.entries.some((e) => e.externalId === 'sf-amex-q3-2026-business-travel'),
+  'ids are readable', plan.entries[0].externalId);
+
+console.log('\n--- I. an unmapped category blocks the post');
+const oddRun = { ...waveRun, summary: { 'Professional Fees': 100, 'Hot Air Ballooning': 250.00 } };
+const oddPlan = planEntries(oddRun, rules);
+check(oddPlan.unmapped.length === 1 && oddPlan.unmapped[0].category === 'Hot Air Ballooning',
+  'the unknown category is reported, not silently dropped');
+check(!oddPlan.entries.some((e) => e.category === 'Hot Air Ballooning'),
+  'and it is not posted to some fallback account');
+check(oddPlan.total === 100, 'the rest still totals correctly', `$${oddPlan.total}`);
+
+console.log('\n--- J. a net-negative category reverses direction');
+const refundPlan = planEntries({ ...waveRun, summary: { 'Professional Fees': -42.50 } }, rules);
+check(refundPlan.entries[0].direction === 'DEPOSIT', 'a net credit is a deposit');
+check(refundPlan.entries[0].balance === 'CREDIT', 'and credits the expense account');
+check(refundPlan.entries[0].amount === 42.50, 'posted as a positive amount',
+  `$${refundPlan.entries[0].amount}`);
+check(refundPlan.total === -42.50, 'but counts against the total', `$${refundPlan.total}`);
+
 function round2(n) { return Math.round(n * 100) / 100; }
 
 console.log(failures ? `\n${failures} check(s) failed.` : '\nAll checks passed.');
