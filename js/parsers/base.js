@@ -10,6 +10,29 @@ export const MONTHS = {
   Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12,
 };
 
+const MONTH_NAMES = {
+  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+  july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+};
+
+/**
+ * A month number from either form a statement might use: the abbreviation that
+ * appears in transaction rows ("Oct") or the full name in the statement-period
+ * line ("October"). MONTHS alone only knows the abbreviation, which silently
+ * yielded undefined for every CIBC statement — that is where filenames like
+ * "CIBC Statement - undefined 13 2026.pdf" came from.
+ *
+ * Deliberately strict: an exact key match only, never a prefix. A loose
+ * three-letter match would read "Marketing" as March and quietly invent dates
+ * out of merchant names.
+ */
+export function monthNum(name) {
+  if (name === undefined || name === null) return undefined;
+  const s = String(name).trim();
+  if (MONTHS[s] !== undefined) return MONTHS[s];
+  return MONTH_NAMES[s.toLowerCase()];
+}
+
 export const AMOUNT_RE = /^-?[\d,]+\.\d{2}$/;
 const WATERMARK_RE = /^\*\d+\*$/;
 
@@ -145,4 +168,22 @@ export function inQuarter(isoStr, label) {
 export function fiscalYearOf(isoStr, fyEndMonth) {
   const [y, m] = isoStr.split('-').map(Number);
   return m > fyEndMonth ? y + 1 : y;
+}
+
+/**
+ * The fiscal year a QUARTER belongs to — which is the only thing that decides
+ * which "Annual Audit {fy} Sep" folder its workbook lives in.
+ *
+ * This must not be derived from the statement's own dates. An October
+ * statement carries the last stretch of Q3 (Sep 18-30, say) but is itself in
+ * the next fiscal year, so dating the folder from the statement sent the app
+ * looking in "Annual Audit 2027 Sep" for a Q3 2026 workbook that was filed
+ * under 2026 — it found nothing and offered to create the quarter afresh.
+ *
+ * Anchoring on the quarter's own end date is right in both directions:
+ * Q3 2026 ends Sep 30 2026 -> FY2026, Q4 2026 ends Dec 31 2026 -> FY2027.
+ */
+export function fiscalYearOfQuarter(label, fyEndMonth) {
+  const b = quarterBounds(label);
+  return b ? fiscalYearOf(b.to, fyEndMonth) : null;
 }
