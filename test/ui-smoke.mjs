@@ -40,7 +40,13 @@ const page = await browser.newPage();
 // Google's sign-in script is a third-party <script> and this sandbox has no
 // route to it. That is an environment fact, not a defect in the page, so it is
 // the one failure this smoke test forgives.
-const isExternal = (t) => /Failed to load resource/i.test(t) && !t.includes('127.0.0.1');
+// Two shapes now: the browser's own "Failed to load resource", and the page's
+// deliberate diagnostic from the script tag's onerror handler. The second one
+// firing here is the handler doing its job — offline is exactly the case it
+// exists to report — so it is forgiven on the same grounds as the first.
+const GSI_BLOCKED = /accounts\.google\.com\/gsi\/client failed to load/i;
+const isExternal = (t) =>
+  (/Failed to load resource/i.test(t) && !t.includes('127.0.0.1')) || GSI_BLOCKED.test(t);
 page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => {
   if (m.type() === 'error' && !isExternal(m.text())) errors.push(m.text());
