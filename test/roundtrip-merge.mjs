@@ -253,6 +253,36 @@ check(back2.rows.length === 2, 'reading back gives 2 in-quarter rows', `${back2.
 check((back2.outside || []).length === 2, 'and 2 outside rows',
   `${(back2.outside || []).length}`);
 
+// ─────────────────────────── identical charges are not the same transaction ──
+// Two Presto fares on one morning, two coffees at one shop: same date, same
+// merchant, same amount, two real charges. Collapsing them destroys money and
+// breaks the reconciliation, so the out-of-quarter list must keep both.
+console.log('\n--- D2. duplicate-looking charges both survive');
+const twins = [
+  { date: '2026-06-21', desc: 'PRESTO FARE', amount: 55.37, category: 'Travel' },
+  { date: '2026-06-21', desc: 'PRESTO FARE', amount: 55.37, category: 'Travel' },
+  { date: '2026-07-06', desc: 'STAPLES #118', amount: 40.00, category: 'Office Supplies' },
+];
+const twinsIn = twins.filter((t) => inQuarter(t.date, 'Q3 2026'));
+const twinsOut = twins.filter((t) => !inQuarter(t.date, 'Q3 2026'));
+const twinsControl = round2(twins.reduce((s, t) => s + t.amount, 0));
+
+const twinBytes = await bytesOf({
+  card: 'amex', quarter: 'Q3 2026', transactions: twinsIn, review: [], flags: [],
+  statements: [{ label: 'Jul 17 2026', controlTotal: twinsControl }],
+  rules, notes: [], outside: twinsOut, bounds: b,
+});
+const twinBack = await readFiledWorkbook(ExcelJS, twinBytes, 'amex', rules);
+check(twinBack.outside.length === 2, 'both identical fares are on the outside sheet',
+  `${twinBack.outside.length} row(s)`);
+const twinOutTotal = round2(twinBack.outside.reduce((s, t) => s + t.amount, 0));
+check(Math.abs(twinOutTotal - 110.74) < 0.005, 'and they total both fares, not one',
+  `$${twinOutTotal.toFixed(2)} (one fare alone would be $55.37)`);
+const twinAll = round2(twinBack.rows.reduce((s, t) => s + t.amount, 0)) + twinOutTotal;
+check(Math.abs(twinAll - twinsControl) < 0.005,
+  'quarter + outside still ties to the statement',
+  `${twinAll.toFixed(2)} vs ${twinsControl.toFixed(2)}`);
+
 // ──────────────────────────────────────────── statement naming convention ──
 console.log('\n--- E. statements are filed under your naming convention');
 const { statementFileName } = await import(path.join(ROOT, 'js/pipeline.js'));
@@ -263,6 +293,46 @@ check(cibcName === 'CIBC Statement - Jun 13 2026.pdf', 'CIBC', cibcName);
 const singleDigit = statementFileName(rules, 'amex', { statementDate: '2026-08-05' });
 check(singleDigit === 'Amex Aug 5 2026 Statement.pdf', 'a single-digit day is not padded',
   singleDigit);
+
+// ─────────────────────────── the fiscal-year folder follows the quarter ──
+// An October statement closes out Q3 but belongs to the NEXT fiscal year.
+// Dating the audit folder from the statement sent Q3 2026 lookups into
+// "Annual Audit 2027 Sep", which does not exist — so the app reported the
+// quarter as unfiled, greyed out "Add to this quarter", and offered to
+// rebuild it from the single statement in hand.
+console.log('\n--- F. the fiscal-year folder follows the quarter, not the statement');
+const { fiscalYearOfQuarter, fiscalYearOf, monthNum } = await import(
+  path.join(ROOT, 'js/parsers/base.js')
+);
+const FYE = rules.fiscalYearEndMonth;
+check(FYE === 9, 'fiscal year ends September', String(FYE));
+check(fiscalYearOfQuarter('Q3 2026', FYE) === 2026,
+  'Q3 2026 files under FY2026', String(fiscalYearOfQuarter('Q3 2026', FYE)));
+check(fiscalYearOfQuarter('Q4 2026', FYE) === 2027,
+  'Q4 2026 files under FY2027', String(fiscalYearOfQuarter('Q4 2026', FYE)));
+check(fiscalYearOfQuarter('Q1 2026', FYE) === 2026,
+  'Q1 2026 files under FY2026', String(fiscalYearOfQuarter('Q1 2026', FYE)));
+check(fiscalYearOf('2026-10-13', FYE) === 2027,
+  'an Oct 13 2026 statement is itself FY2027 — the old, wrong basis');
+check(fiscalYearOfQuarter('Q3 2026', FYE) !== fiscalYearOf('2026-10-13', FYE),
+  'which is exactly why the two must not be the same number');
+check(fiscalYearOfQuarter('nonsense', FYE) === null,
+  'an unparseable quarter yields null so the caller can fall back');
+
+// ──────────────────────────────── statement months, abbreviated or full ──
+// CIBC writes "September 14 to October 13, 2026". The abbreviation map alone
+// returned undefined, which reached Drive as "CIBC Statement - undefined 13
+// 2026.pdf" and as an undefined month inside the statement date.
+console.log('\n--- G. month names parse in both forms');
+check(monthNum('Oct') === 10, 'abbreviated "Oct"', String(monthNum('Oct')));
+check(monthNum('October') === 10, 'full "October"', String(monthNum('October')));
+check(monthNum('September') === 9, 'full "September"', String(monthNum('September')));
+check(monthNum('MARCH') === 3, 'case-insensitive full name', String(monthNum('MARCH')));
+check(monthNum('Marketing') === undefined,
+  'a merchant word is NOT read as a month', String(monthNum('Marketing')));
+check(monthNum('Mayfair') === undefined,
+  'nor is "Mayfair" read as May', String(monthNum('Mayfair')));
+check(monthNum(undefined) === undefined, 'undefined in, undefined out');
 
 function round2(n) { return Math.round(n * 100) / 100; }
 
