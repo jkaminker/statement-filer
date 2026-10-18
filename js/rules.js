@@ -6,12 +6,33 @@ const LS_KEY = 'statement-filer.rules';
 
 export async function loadRules() {
   const stored = localStorage.getItem(LS_KEY);
+  let user = null;
   if (stored) {
-    try { return JSON.parse(stored); } catch (_) { /* fall through to the file */ }
+    try { user = JSON.parse(stored); } catch (_) { user = null; }
   }
-  const res = await fetch('rules.json', { cache: 'no-store' });
-  if (!res.ok) throw new Error('Could not load rules.json');
-  return res.json();
+
+  let shipped = null;
+  try {
+    const res = await fetch('rules.json', { cache: 'no-store' });
+    if (res.ok) shipped = await res.json();
+  } catch (_) { /* offline: the stored copy still has to work */ }
+
+  if (!user) {
+    if (!shipped) throw new Error('Could not load rules.json');
+    return shipped;
+  }
+  if (!shipped) return user;
+
+  // Backfill top-level keys the stored copy predates.
+  //
+  // Your saved rules are authoritative for everything they already contain —
+  // this only fills gaps. Without it, a rules file saved before a feature
+  // shipped silently disables that feature forever, and only on the machine
+  // that has actually been used. Tests, loading rules.json fresh, never see it.
+  for (const key of Object.keys(shipped)) {
+    if (user[key] === undefined) user[key] = shipped[key];
+  }
+  return user;
 }
 
 export function saveRules(rules) {
