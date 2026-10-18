@@ -30,13 +30,70 @@ export function signOut() {
   tokenExpiry = 0;
 }
 
-/** Opens Google's sign-in popup and holds the token in memory only. */
-export function connect(clientId) {
+// Google's sign-in library is pulled in with <script async defer>, so it is NOT
+// guaranteed to be ready when the page becomes interactive. Checking once at
+// click time and giving up is a race the user loses on a cold cache or a slow
+// connection — and loses silently, because a blocked script logs nothing.
+const GSI_TIMEOUT_MS = 12000;
+const GSI_POLL_MS = 100;
+
+export function gsiReady() {
+  return !!window.google?.accounts?.oauth2;
+}
+
+/**
+ * Wait for the sign-in library, up to a timeout, instead of failing on the
+ * first look. `onWait` fires once and only when we actually have to wait, so
+ * the caller can say so rather than looking frozen.
+ *
+ * index.html sets window.__gsiBlocked if the script tag itself errors — that is
+ * a definite failure, so there is no point sitting through the whole timeout.
+ */
+export function waitForGsi(timeoutMs = GSI_TIMEOUT_MS, onWait = () => {}) {
+  if (gsiReady()) return Promise.resolve(true);
+  if (window.__gsiBlocked) return Promise.reject(new Error(blockedMessage()));
+
+  onWait();
+  const started = Date.now();
   return new Promise((resolve, reject) => {
-    if (!window.google?.accounts?.oauth2) {
-      reject(new Error('Google sign-in did not load. Check your connection and reload.'));
-      return;
-    }
+    const tick = () => {
+      if (gsiReady()) {
+        console.info(`[statement-filer] Google sign-in ready after ${Date.now() - started}ms.`);
+        resolve(true);
+        return;
+      }
+      if (window.__gsiBlocked) {
+        reject(new Error(blockedMessage()));
+        return;
+      }
+      if (Date.now() - started >= timeoutMs) {
+        console.error(
+          '[statement-filer] accounts.google.com/gsi/client never initialised after '
+          + `${timeoutMs}ms. window.google is ${typeof window.google}.`
+        );
+        reject(new Error(
+          `Google sign-in did not load after ${Math.round(timeoutMs / 1000)} seconds.\n\n`
+          + blockedMessage()
+        ));
+        return;
+      }
+      setTimeout(tick, GSI_POLL_MS);
+    };
+    setTimeout(tick, GSI_POLL_MS);
+  });
+}
+
+function blockedMessage() {
+  return 'Something is almost certainly blocking accounts.google.com — an ad blocker, '
+    + 'a privacy or tracking-protection extension, or a network filter.\n\n'
+    + 'Try allowing accounts.google.com for this site, or open the filer in a private '
+    + 'window with extensions disabled. A plain reload sometimes clears it too.';
+}
+
+/** Opens Google's sign-in popup and holds the token in memory only. */
+export async function connect(clientId, onWait = () => {}) {
+  await waitForGsi(GSI_TIMEOUT_MS, onWait);
+  return new Promise((resolve, reject) => {
     tokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: SCOPE,
