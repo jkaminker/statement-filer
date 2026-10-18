@@ -2,6 +2,7 @@ import { loadRules, saveRules, resetRules, learn, summarize } from './rules.js';
 import { run as runPipeline, inspect as inspectFiles, applyReview } from './pipeline.js';
 import { readReviewedWorkbook, readFiledWorkbook } from './workbook.js';
 import * as drive from './drive.js';
+import { fiscalYearOfQuarter } from './parsers/base.js';
 
 const $ = (id) => document.getElementById(id);
 const LS_CLIENT = 'statement-filer.clientId';
@@ -75,11 +76,17 @@ function initSettings() {
           + 'The Setup tab walks through making one.');
       return;
     }
+    const btn = $('connectBtn');
+    btn.disabled = true;
     try {
-      await drive.connect(clientId);
-      refreshDriveState();
+      // the callback only fires if Google's script is not ready yet, so the
+      // button says what it is doing instead of sitting there looking dead
+      await drive.connect(clientId, () => { btn.textContent = 'Waiting for Google…'; });
     } catch (e) {
       alert(`Could not connect to Google Drive.\n\n${e.message}`);
+    } finally {
+      btn.disabled = false;
+      refreshDriveState();   // puts the right label back either way
     }
   });
 }
@@ -192,6 +199,13 @@ function initPreflight() {
 
 const fileKey = () => files.map((f) => `${f.name}:${f.size}`).join('|');
 const chosenQuarter = () => $('pfQuarter').value || (inspected && inspected.quarter) || '';
+// Which "Annual Audit {fy} Sep" folder the CHOSEN quarter lives in. Not the
+// statement's own fiscal year: an October statement closing out Q3 belongs to
+// the Q3 folder, and reading the year off the statement sent lookups into a
+// folder that did not exist, so the app reported the quarter as unfiled.
+const chosenFiscalYear = (q) =>
+  fiscalYearOfQuarter(q || chosenQuarter(), rules.fiscalYearEndMonth)
+  ?? (inspected && inspected.fiscalYear);
 const chosenMode = () =>
   (document.querySelector('input[name="runMode"]:checked') || {}).value || 'append';
 
@@ -267,11 +281,20 @@ async function fillQuarterOptions() {
   const wanted = new Set([inspected.quarter, ...inspected.quarters]);
   for (const q of neighbours(inspected.quarter)) wanted.add(q);
   if (drive.isSignedIn()) {
-    try {
-      for (const q of await drive.listQuarters(inspected.card, inspected.fiscalYear, rules)) {
-        wanted.add(q);
-      }
-    } catch (_) { /* the picker is still usable without Drive */ }
+    // The candidates can straddle a fiscal-year boundary (Q3 2026 and Q4 2026
+    // sit in different audit folders), so look in every folder they imply
+    // rather than only the statement's own.
+    const fys = new Set();
+    for (const q of [...wanted]) {
+      const fy = fiscalYearOfQuarter(q, rules.fiscalYearEndMonth);
+      if (fy) fys.add(fy);
+    }
+    if (!fys.size && inspected.fiscalYear) fys.add(inspected.fiscalYear);
+    for (const fy of fys) {
+      try {
+        for (const q of await drive.listQuarters(inspected.card, fy, rules)) wanted.add(q);
+      } catch (_) { /* the picker is still usable without Drive */ }
+    }
   }
   const list = [...wanted].sort((a, b) => rank(b) - rank(a));
   sel.innerHTML = list
@@ -357,7 +380,7 @@ async function renderPreflightFiled() {
   const seq = preflightSeq;
   let probe = null;
   try {
-    probe = await drive.probeFiled(inspected.card, quarter, inspected.fiscalYear, rules);
+    probe = await drive.probeFiled(inspected.card, quarter, chosenFiscalYear(quarter), rules);
   } catch (e) {
     if (seq !== preflightSeq) return;
     host.innerHTML = `<div class="pf-note pf-note-warn">Could not reach Drive: `
@@ -370,7 +393,7 @@ async function renderPreflightFiled() {
 
   $('pfPath').textContent = probe
     ? probe.path
-    : `${rules.driveRoot.map((n) => n.replace('{fy}', inspected.fiscalYear)).join(' / ')}`
+    : `${rules.driveRoot.map((n) => n.replace('{fy}', chosenFiscalYear(quarter))).join(' / ')}`
       + ` / ${rules.cards[inspected.card].driveFolder} / ${quarter}  (will be created)`;
 
   if (!probe || !probe.workbook) {
