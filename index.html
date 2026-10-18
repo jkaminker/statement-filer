@@ -27,6 +27,7 @@
 <nav class="tabs" role="tablist">
   <button class="tab is-active" data-tab="process" role="tab">1 · Process statements</button>
   <button class="tab" data-tab="review" role="tab">2 · Apply my review</button>
+  <button class="tab" data-tab="wave" role="tab">3 · Post to Wave</button>
   <button class="tab" data-tab="filed" role="tab">What's filed</button>
   <button class="tab" data-tab="rules" role="tab">Rules</button>
   <button class="tab" data-tab="help" role="tab">Setup</button>
@@ -101,6 +102,43 @@
 
   <div id="log" class="log" hidden></div>
   <div id="result" class="result" hidden></div>
+</section>
+
+<!-- ═════════════════════════════════════════════════════════ WAVE ══ -->
+<section id="tab-wave" class="panel">
+  <div class="card">
+    <h2>Post this quarter to Wave</h2>
+    <p class="muted">
+      Each category posts as one withdrawal on
+      <strong id="wvAnchor">your shareholder loan account</strong>, with the expense
+      account as its line item — the same shape as the Home Office entries already
+      in your ledger. Personal spending is never posted.
+    </p>
+
+    <div class="field">
+      <label for="wvToken">Wave Full Access Token</label>
+      <input id="wvToken" type="password" autocomplete="off" spellcheck="false"
+             placeholder="Paste your token…">
+      <p class="muted small">
+        Held in memory for this tab only — never saved to disk, never put in a URL.
+        It grants full access to your books, so it is dropped the moment you close
+        this page. Create one under Wave → Settings → API, or revoke it there.
+      </p>
+    </div>
+
+    <div class="actions">
+      <button id="wvConnect" class="btn btn-primary">Connect to Wave</button>
+      <button id="wvDisconnect" class="btn btn-ghost" hidden>Disconnect</button>
+      <span id="wvState" class="pill pill-off">Not connected</span>
+    </div>
+
+    <div id="wvBusinessWrap" class="field" hidden>
+      <label for="wvBusiness">Business</label>
+      <select id="wvBusiness"></select>
+    </div>
+  </div>
+
+  <div id="wvPreview" class="result"></div>
 </section>
 
 <!-- ═══════════════════════════════════════════════════════ REVIEW ══ -->
